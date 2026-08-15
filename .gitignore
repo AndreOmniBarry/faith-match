@@ -1,0 +1,9 @@
+# Python backend
+server/.venv/
+server/__pycache__/
+server/**/__pycache__/
+server/data.db
+*.pyc
+
+# OS/editor cruft
+.DS_Store
