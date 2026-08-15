@@ -89,7 +89,8 @@ function curveShape(index){
   let moves = 24 - ramp;
   if(index % BREATHER_EVERY === 0 && index > 0) moves += 2;
   moves = Math.max(13, moves);
-  const veilDensity = Math.min(0.22, Math.max(0, (index-4)*0.006));
+  // Floored at 0.08, not 0 — see server/app/level_gen.py for why.
+  const veilDensity = Math.min(0.22, 0.08 + index*0.0035);
   return { rows, cols, colors, moves, veilDensity };
 }
 function easeShape(shape){

@@ -68,8 +68,10 @@ def _curve_shape(index: int) -> dict:
     moves = max(13, moves)
 
     # Veil (obstacle) density only matters for the 'veil' objective mode, but
-    # we compute it here so it still respects the same global ramp.
-    veil_density = min(0.22, max(0.0, (index - 4) * 0.006))
+    # we compute it here so it still respects the same global ramp. Floored
+    # at 0.08 (not 0) — a Refiner's Fire level with zero veils has nothing to
+    # refine: the win condition is already satisfied before the first move.
+    veil_density = min(0.22, 0.08 + index * 0.0035)
 
     return {"rows": rows, "cols": cols, "colors": colors, "moves": moves, "veil_density": veil_density}
 
