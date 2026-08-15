@@ -9,6 +9,10 @@
 
 import { fetchLevel, fetchChapter, fetchDaily } from './api.js';
 
+// This build's documented content range — see server/app/level_gen.py for
+// why this isn't 1000 hand-authored rows.
+const CONTENT_CEILING_LEVELS = 1000;
+
 const SYMBOLS = [
   { emoji:'✝️', color:'var(--c-cross)', name:'Cross' },
   { emoji:'🕊️', color:'var(--c-dove)',  name:'Dove'  },
@@ -76,9 +80,19 @@ function seededShuffle(arr, rng){
 }
 
 // Difficulty curve — mirrors server/app/level_gen.py `_curve_shape` /
-// `_ease`. DIFFICULTY_EASE must match the server constant.
+// `_ease`. DIFFICULTY_EASE must match the server constant. Lower ease =
+// kinder (more bonus moves, fewer veils, lower score target); finale levels
+// use FINALE_EASE (>1.0, harder than neutral) instead.
 const DIFFICULTY_EASE = 0.90;
+const FINALE_EASE = 1.08;
 const BREATHER_EVERY = 5;
+const CHAPTER_TAIL = 3; // last N levels of a chapter are the "finale"
+
+const FINALE_PIECES = ['wildcard','lockedChain','doublePoints','shrinking'];
+const FINALE_TASKS = ['score','collect','veil','timed'];
+const FINALE_SKINS = ['dawn','ember','tempest','hallowed','midnight','harvest'];
+const FINALE_CONSTRAINTS = ['tighterMoves','hazardTile','raisedTarget','moreColors','noEasing'];
+const pickFrom = (arr, rng)=>arr[Math.floor(rng()*arr.length)];
 
 function curveShape(index){
   const tier = Math.floor(index/40);
@@ -93,22 +107,60 @@ function curveShape(index){
   const veilDensity = Math.min(0.22, 0.08 + index*0.0035);
   return { rows, cols, colors, moves, veilDensity };
 }
-function easeShape(shape){
+function easeShape(shape, ease){
   return {
     ...shape,
-    moves: Math.round(shape.moves * (2 - DIFFICULTY_EASE)),
-    veilDensity: Math.round(shape.veilDensity * DIFFICULTY_EASE * 10000) / 10000,
+    moves: Math.round(shape.moves * (2 - ease)),
+    veilDensity: Math.round(shape.veilDensity * ease * 10000) / 10000,
   };
+}
+function veilCellsFor(shape, rng, density){
+  const cells = [];
+  for(let r=0;r<shape.rows;r++) for(let c=0;c<shape.cols;c++) cells.push([r,c]);
+  const shuffled = seededShuffle(cells, rng);
+  const n = Math.round(cells.length * density);
+  const layers = density < 0.14 ? 1 : 2;
+  return shuffled.slice(0,n).map(([r,c])=>[r,c,layers]);
+}
+
+function applyFinale(level, shape, mods, rng){
+  level.finalePiece = mods.piece;
+  level.skin = mods.skin;
+  level.finale = true;
+
+  if(mods.piece==='lockedChain'){
+    const extra = veilCellsFor(shape, rng, 0.10);
+    level.veil = { cells: (level.veil?.cells||[]).concat(extra) };
+  }else if(mods.piece==='doublePoints'){
+    level.bonusMultiplier = 2.0;
+  }else if(mods.piece==='shrinking'){
+    const cells = [];
+    for(let r=0;r<shape.rows;r++) for(let c=0;c<shape.cols;c++) cells.push([r,c]);
+    level.shrinkCells = seededShuffle(cells, rng).slice(0,4);
+  }
+
+  if(mods.task==='timed') level.timedSeconds = 300;
+
+  if(mods.constraint==='tighterMoves') level.moves = Math.max(8, Math.round(level.moves*0.85));
+  else if(mods.constraint==='hazardTile'){
+    const extra = veilCellsFor(shape, rng, 0.08);
+    level.veil = { cells: (level.veil?.cells||[]).concat(extra) };
+  }else if(mods.constraint==='raisedTarget') level.target = Math.round(level.target*1.4);
+  else if(mods.constraint==='moreColors') level.colors = Math.min(SYMBOLS.length, level.colors+1);
 }
 
 function localFallbackLevel(mode, index){
-  const shape = easeShape(curveShape(index));
+  const slotInChapter = index % CHAPTER_SIZE;
+  const isFinale = slotInChapter >= CHAPTER_SIZE - CHAPTER_TAIL;
+  const ease = isFinale ? FINALE_EASE : DIFFICULTY_EASE;
+  const rawShape = curveShape(index);
+  const shape = easeShape(rawShape, ease);
   const rng = mulberry32(hashSeed(`faithmatch::${mode}::${index}`));
   // No simulated playouts offline — approximate the same target shape the
   // server would calibrate to, from board size/move budget directly.
   const cellBudget = shape.rows*shape.cols*shape.colors;
   const rawTarget = 60*shape.moves + cellBudget*9;
-  const target = Math.max(200, Math.round(rawTarget * 0.72 * DIFFICULTY_EASE / 10) * 10);
+  const target = Math.max(200, Math.round(rawTarget * 0.72 * ease / 10) * 10);
   const objective = modeById(mode)?.objective || 'score';
   const names = ['A Gentle Start','Rising Faith','Steady Hands','Widening Path','Deeper Waters',
     "Refiner's Fire",'Mountain Climb','Radiant Crown','Quiet Trust','Open Doors','Living Water','New Mercies'];
@@ -128,14 +180,27 @@ function localFallbackLevel(mode, index){
     level.collect = kinds.map(k=>({ type:k, count: base + Math.floor(rng()*5)-2 }));
     level.target = Math.round(target*0.6);
   }else if(objective === 'veil'){
-    const cells = [];
-    for(let r=0;r<shape.rows;r++) for(let c=0;c<shape.cols;c++) cells.push([r,c]);
-    const shuffled = seededShuffle(cells, rng);
-    const n = Math.round(cells.length * shape.veilDensity);
-    const layers = shape.veilDensity < 0.14 ? 1 : 2;
-    level.veil = { cells: shuffled.slice(0,n).map(([r,c])=>[r,c,layers]) };
+    level.veil = { cells: veilCellsFor(shape, rng, shape.veilDensity) };
+  }
+
+  if(isFinale){
+    const chapter = Math.floor(index/CHAPTER_SIZE) + 1;
+    const slot = slotInChapter - (CHAPTER_SIZE - CHAPTER_TAIL);
+    const modRng = mulberry32(hashSeed(`finale::${mode}::${chapter}::${slot}`));
+    const mods = { piece:pickFrom(FINALE_PIECES,modRng), task:pickFrom(FINALE_TASKS,modRng),
+      skin:pickFrom(FINALE_SKINS,modRng), constraint:pickFrom(FINALE_CONSTRAINTS,modRng) };
+    applyFinale(level, shape, mods, rng);
   }
   return level;
+}
+
+function chapterGate(mode, chapterNum){
+  const rng = mulberry32(hashSeed(`gate::${mode}::${chapterNum}`));
+  if(rng() > 0.4) return null;
+  const position = 9 + Math.floor(rng()*(CHAPTER_SIZE-9)); // 0-indexed, levels 10-15
+  const maxStarsSoFar = position*3;
+  const threshold = Math.round(maxStarsSoFar * (0.55 + rng()*0.10));
+  return { position, starsRequired: threshold };
 }
 
 function curatedOverride(mode, index){
@@ -158,19 +223,21 @@ async function getLevel(mode, index){
 }
 
 async function getChapter(mode, chapterNum){
-  let levels;
+  let levels, gate;
   try{
-    levels = (await fetchChapter(mode, chapterNum)).levels;
+    const res = await fetchChapter(mode, chapterNum);
+    levels = res.levels; gate = res.gate;
   }catch(e){
     const start = (chapterNum-1)*CHAPTER_SIZE;
     levels = [];
     for(let i=0;i<CHAPTER_SIZE;i++) levels.push(await getLevel(mode, start+i));
-    return levels; // already curated via getLevel above
+    return { levels, gate: chapterGate(mode, chapterNum) }; // already curated via getLevel above
   }
   // Network path bypasses curatedOverride — splice the hand-tuned intro back in.
-  return levels.map(lvl => curatedOverride(mode, lvl.index) || lvl);
+  return { levels: levels.map(lvl => curatedOverride(mode, lvl.index) || lvl), gate };
 }
 
+const DAILY_SESSION_LENGTH = 3;
 function todaySeedIndex(){
   const d = new Date();
   const iso = d.toISOString().slice(0,10);
@@ -181,13 +248,22 @@ async function getDaily(){
   try{
     return await fetchDaily();
   }catch(e){
-    const idx = todaySeedIndex();
-    const level = localFallbackLevel('daily-blessing', idx);
-    level.moves = Math.max(10, level.moves - 3);
-    level.bonusMultiplier = 1.5;
-    level.date = new Date().toISOString().slice(0,10);
-    return level;
+    const baseIdx = todaySeedIndex();
+    const today = new Date().toISOString().slice(0,10);
+    const levels = [];
+    for(let i=0;i<DAILY_SESSION_LENGTH;i++){
+      const level = localFallbackLevel('daily-blessing', baseIdx+i);
+      level.moves = Math.max(10, level.moves - 3);
+      level.bonusMultiplier = Math.max(level.bonusMultiplier||1, 1.5);
+      level.date = today;
+      level.dailySlot = i;
+      levels.push(level);
+    }
+    return { date: today, levels };
   }
 }
 
-export { SYMBOLS, MODES, modeById, CHAPTER_SIZE, getLevel, getChapter, getDaily };
+export {
+  SYMBOLS, MODES, modeById, CHAPTER_SIZE, CONTENT_CEILING_LEVELS,
+  getLevel, getChapter, getDaily,
+};

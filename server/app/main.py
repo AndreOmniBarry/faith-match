@@ -30,7 +30,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import db
 from .daily import get_daily
-from .level_gen import CHAPTER_SIZE, DIFFICULTY_EASE, get_chapter, get_level
+from .level_gen import CHAPTER_SIZE, CONTENT_CEILING_LEVELS, DIFFICULTY_EASE, get_chapter, get_level
 from .models import AnalyticsEvent, ScoreSubmission
 from .scoring import stars_for, validate_score
 
@@ -58,7 +58,10 @@ VALID_MODES = {"grace-path", "harvest", "refiners-fire", "daily-blessing"}
 
 @api.get("/health")
 def health() -> dict:
-    return {"ok": True, "difficultyEase": DIFFICULTY_EASE, "chapterSize": CHAPTER_SIZE}
+    return {
+        "ok": True, "difficultyEase": DIFFICULTY_EASE, "chapterSize": CHAPTER_SIZE,
+        "contentCeilingLevels": CONTENT_CEILING_LEVELS,
+    }
 
 
 @api.get("/modes")
@@ -91,7 +94,8 @@ def chapter(mode: str, chapter: int) -> dict:
     _check_mode(mode)
     if chapter < 1:
         raise HTTPException(status_code=400, detail="chapter must be >= 1")
-    return {"mode": mode, "chapter": chapter, "levels": get_chapter(mode, chapter)}
+    data = get_chapter(mode, chapter)
+    return {"mode": mode, "chapter": chapter, "levels": data["levels"], "gate": data["gate"]}
 
 
 @api.get("/daily")

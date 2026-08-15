@@ -15,6 +15,8 @@
 <link rel="stylesheet" href="css/board.css">
 </head>
 <body>
+<div class="ambient-bg" aria-hidden="true"><span></span><span></span><span></span></div>
+
 <div class="app" id="app">
 
   <!-- SPLASH -->
@@ -40,11 +42,27 @@
 
   <!-- MODE SELECT -->
   <section class="screen hidden" id="screen-modes">
+    <button class="status-bar" id="btn-dashboard">
+      <span class="status-chip">❤️ <span id="status-lives">5</span></span>
+      <span class="status-chip">💎 <span id="status-gems">0</span></span>
+      <span class="status-chip">🔥 <span id="status-streak">0</span></span>
+    </button>
     <div class="modes-header">
       <h2>Choose Your Path</h2>
       <p>Every mode plays differently — pick where your faith walks today.</p>
     </div>
     <div class="mode-list" id="mode-list"></div>
+  </section>
+
+  <!-- DASHBOARD -->
+  <section class="screen hidden" id="screen-dashboard">
+    <div class="back-row"><button class="icon-btn" id="btn-back-dashboard">←</button><span class="crumb">Modes</span></div>
+    <div class="lvl-header"><h2>Your Journey</h2><p>Lives, gems, streak, and what you've earned.</p></div>
+    <div class="dash-grid" id="dash-grid"></div>
+    <div class="dash-section-title">Inventory</div>
+    <div class="dash-inventory" id="dash-inventory"></div>
+    <div class="dash-section-title">Stars Earned</div>
+    <div class="dash-stars" id="dash-stars"></div>
   </section>
 
   <!-- CHAPTERS -->
@@ -75,18 +93,31 @@
         <div class="lvl-name" id="game-level-name">LEVEL 1</div>
         <div class="lvl-mode" id="game-mode-name"></div>
       </div>
+      <button class="icon-btn" id="btn-inventory">🎒</button>
       <button class="icon-btn" id="btn-sound-game">🔊</button>
     </div>
     <div class="hud-stats">
       <div class="stat-pill"><div class="val" id="stat-score">0</div><div class="lbl">Score</div></div>
       <div class="stat-pill"><div class="val" id="stat-moves">0</div><div class="lbl">Moves</div></div>
     </div>
+    <button class="meter-wrap" id="btn-combo-meter" title="Fill by chaining combos">
+      <div class="meter-track"><div class="meter-fill" id="meter-fill"></div></div>
+      <span class="meter-label" id="meter-label">Combo Surge</span>
+    </button>
     <div id="objective-area"></div>
     <div class="board-arch" id="board-arch">
       <div class="board" id="board"></div>
       <canvas class="fx-canvas" id="fx-canvas"></canvas>
       <div class="flash-layer" id="flash-layer"></div>
       <div class="combo-popup" id="combo-popup"></div>
+      <div class="timer-badge hidden" id="timer-badge">5:00</div>
+    </div>
+    <div class="tray-overlay hidden" id="tray-overlay">
+      <div class="tray-panel">
+        <div class="tray-title">Your Items</div>
+        <div class="tray-list" id="tray-list"></div>
+        <button class="btn-ghost" id="btn-tray-close">Close</button>
+      </div>
     </div>
   </section>
 

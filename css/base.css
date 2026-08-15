@@ -25,6 +25,9 @@
   --striped-glow:#ffffff;
   --wrapped-glow:#f4d78c;
   --colorbomb-glow:#c98bf0;
+  /* Set per-chapter by screens.js (js/theme.js) so stages read as visually
+     distinct from one another, not a re-skin of the same seven screens. */
+  --chapter-accent:var(--gold);
   --font-display:'Cinzel', Georgia, 'Times New Roman', serif;
   --font-body:'Quicksand','Nunito',system-ui,-apple-system,sans-serif;
 }
@@ -55,6 +58,37 @@ button{font-family:var(--font-body); border:none; cursor:pointer; -webkit-tap-hi
   display:flex;
   flex-direction:column;
   position:relative;
+  z-index:1;
+}
+
+/* ---------- ambient living background ---------- */
+/* Slow drifting light behind everything, on every screen, so the app never
+   reads as a static image even when nothing else is animating. CSS-only —
+   no canvas, no JS cost. Tinted per-chapter via --chapter-accent. */
+.ambient-bg{
+  position:fixed; inset:0; z-index:0; pointer-events:none; overflow:hidden;
+}
+.ambient-bg span{
+  position:absolute;
+  width:46vmax; height:46vmax;
+  border-radius:50%;
+  background:radial-gradient(circle, color-mix(in srgb, var(--chapter-accent) 30%, transparent) 0%, transparent 70%);
+  filter:blur(2px);
+  animation:driftOrb 34s ease-in-out infinite;
+  opacity:.55;
+}
+.ambient-bg span:nth-child(1){ top:-18vmax; left:-14vmax; animation-duration:38s; }
+.ambient-bg span:nth-child(2){ bottom:-20vmax; right:-16vmax; animation-duration:44s; animation-delay:-12s;
+  background:radial-gradient(circle, color-mix(in srgb, var(--rose) 22%, transparent) 0%, transparent 70%); }
+.ambient-bg span:nth-child(3){ top:30%; left:60%; width:32vmax; height:32vmax; animation-duration:30s; animation-delay:-6s;
+  background:radial-gradient(circle, color-mix(in srgb, var(--gold-soft) 20%, transparent) 0%, transparent 70%); }
+@keyframes driftOrb{
+  0%,100%{ transform:translate(0,0) scale(1); }
+  33%{ transform:translate(4vmax,-3vmax) scale(1.08); }
+  66%{ transform:translate(-3vmax,4vmax) scale(0.96); }
+}
+@media (prefers-reduced-motion: reduce){
+  .ambient-bg span{ animation:none; }
 }
 
 .screen{
@@ -70,7 +104,7 @@ button{font-family:var(--font-body); border:none; cursor:pointer; -webkit-tap-hi
 
 .glow-rays{
   position:absolute; inset:0; z-index:-1; pointer-events:none;
-  background: repeating-conic-gradient(from 0deg, rgba(230,183,84,.05) 0deg 6deg, transparent 6deg 12deg);
+  background: repeating-conic-gradient(from 0deg, color-mix(in srgb, var(--chapter-accent) 20%, transparent) 0deg 6deg, transparent 6deg 12deg);
   -webkit-mask-image: radial-gradient(circle at 50% 0%, black 0%, transparent 70%);
   mask-image: radial-gradient(circle at 50% 0%, black 0%, transparent 70%);
   animation: spin 90s linear infinite;

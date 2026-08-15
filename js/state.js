@@ -3,11 +3,16 @@
 // window.storage when the host provides it, with an in-memory fallback so the
 // game still works (just doesn't persist) in a plain browser tab.
 
-const STORAGE_KEY = 'faithmatch_progress_v2';
+const STORAGE_KEY = 'faithmatch_progress_v3';
 
 const state = {
   soundOn: true,
   modes: {}, // modeId -> { unlockedLevels:1, levelStars:{ [index]: 1-3 } }
+  lives: 5,
+  livesUpdatedAt: Date.now(), // regen math lives in js/lives.js
+  gems: 0,
+  inventory: {}, // itemId -> count, see js/rewards.js
+  daily: { lastCompletedDate: null, streak: 0, session: null }, // see js/rewards.js
 };
 
 function modeState(modeId){
@@ -23,6 +28,11 @@ async function loadState(){
       const data = JSON.parse(res.value);
       if(typeof data.soundOn === 'boolean') state.soundOn = data.soundOn;
       if(data.modes && typeof data.modes === 'object') Object.assign(state.modes, data.modes);
+      if(typeof data.lives === 'number') state.lives = data.lives;
+      if(typeof data.livesUpdatedAt === 'number') state.livesUpdatedAt = data.livesUpdatedAt;
+      if(typeof data.gems === 'number') state.gems = data.gems;
+      if(data.inventory && typeof data.inventory === 'object') Object.assign(state.inventory, data.inventory);
+      if(data.daily && typeof data.daily === 'object') Object.assign(state.daily, data.daily);
     }
   }catch(e){ /* no saved progress yet — start fresh */ }
   return state;
@@ -31,7 +41,11 @@ async function loadState(){
 async function saveState(){
   if(!window.storage) return;
   try{
-    await window.storage.set(STORAGE_KEY, JSON.stringify({ soundOn: state.soundOn, modes: state.modes }));
+    await window.storage.set(STORAGE_KEY, JSON.stringify({
+      soundOn: state.soundOn, modes: state.modes,
+      lives: state.lives, livesUpdatedAt: state.livesUpdatedAt,
+      gems: state.gems, inventory: state.inventory, daily: state.daily,
+    }));
   }catch(e){ /* non-fatal */ }
 }
 
@@ -49,8 +63,13 @@ function recordCompletion(modeId, index, stars){
 function setSoundOn(v){ state.soundOn = v; saveState(); }
 function getSoundOn(){ return state.soundOn; }
 
+function getTotalStars(modeId){
+  const m = modeState(modeId);
+  return Object.values(m.levelStars).reduce((a,b)=>a+b, 0);
+}
+
 export {
   state, loadState, saveState, modeState,
   getUnlockedCount, getStars, isUnlocked, recordCompletion,
-  setSoundOn, getSoundOn,
+  setSoundOn, getSoundOn, getTotalStars,
 };

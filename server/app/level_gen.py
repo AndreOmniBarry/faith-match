@@ -36,6 +36,22 @@ BREATHER_EVERY = 5        # every Nth level inside a run is deliberately a notch
 SIM_PLAYOUTS = 18         # Monte Carlo playouts used to calibrate a score target
 SIM_RANDOM_MOVE_CHANCE = 0.22   # fraction of moves a simulated "average player" plays sub-optimally
 
+# This build's documented content range. Not 1000 hand-authored rows — the
+# generator below is already unbounded and deterministic; this is the range
+# we're calling "released" for now, per the "scope by 1000 each build" plan.
+# Raise by CHAPTER_SIZE*~67 next time; nothing else here needs to change.
+CONTENT_CEILING_LEVELS = 1000
+
+# Stage-finale modifier axes (levels 13-15 of every chapter). Seeded per
+# (mode, chapter, slot), independent of each other, so combinations don't
+# repeat predictably: 4 pieces x 4 tasks x 6 skins x 5 constraints = 480
+# per slot x 3 slots = comfortably past 1000 distinct non-repeating finales
+# without hand-authoring any of them — same principle as the level curve.
+FINALE_PIECES = ["wildcard", "lockedChain", "doublePoints", "shrinking"]
+FINALE_TASKS = ["score", "collect", "veil", "timed"]
+FINALE_SKINS = ["dawn", "ember", "tempest", "hallowed", "midnight", "harvest"]
+FINALE_CONSTRAINTS = ["tighterMoves", "hazardTile", "raisedTarget", "moreColors", "noEasing"]
+
 
 def _seed(mode: str, index: int) -> int:
     """Deterministic 63-bit seed for (mode, index). Stable across processes/hosts."""
@@ -76,10 +92,14 @@ def _curve_shape(index: int) -> dict:
     return {"rows": rows, "cols": cols, "colors": colors, "moves": moves, "veil_density": veil_density}
 
 
-def _ease(shape: dict) -> dict:
+def _ease(shape: dict, ease: float) -> dict:
+    """Lower `ease` = kinder (more bonus moves, fewer veils, lower score
+    target relative to what a simulated player achieves). ease=1.0 is
+    "no adjustment" baseline; finale levels intentionally use ease>1 to be
+    genuinely harder, not just differently flavored — see FINALE_EASE."""
     eased = dict(shape)
-    eased["moves"] = round(shape["moves"] * (2 - DIFFICULTY_EASE))  # ease>1 -> more moves
-    eased["veil_density"] = round(shape["veil_density"] * DIFFICULTY_EASE, 4)
+    eased["moves"] = round(shape["moves"] * (2 - ease))
+    eased["veil_density"] = round(shape["veil_density"] * ease, 4)
     return eased
 
 
@@ -262,7 +282,7 @@ def _simulate_playout(rows, cols, colors, moves, rng) -> int:
     return score
 
 
-def _calibrate_target(shape: dict, rng: random.Random) -> tuple[int, int]:
+def _calibrate_target(shape: dict, rng: random.Random, ease: float) -> tuple[int, int]:
     """Runs SIM_PLAYOUTS simulated playouts and returns (target, median_sim_score)."""
     scores = sorted(
         _simulate_playout(shape["rows"], shape["cols"], shape["colors"], shape["moves"], rng)
@@ -271,7 +291,7 @@ def _calibrate_target(shape: dict, rng: random.Random) -> tuple[int, int]:
     median = scores[len(scores) // 2]
     # Target is a fraction of what a mixed-skill simulated player achieves,
     # then eased — reachable without perfect play, still a real goal.
-    target_ratio = 0.72 * DIFFICULTY_EASE
+    target_ratio = 0.72 * ease
     target = max(200, round(median * target_ratio / 10) * 10)
     return target, median
 
@@ -352,13 +372,86 @@ def _collect_targets(rng: random.Random, colors: int, index: int) -> list[dict]:
     return [{"type": k, "count": base + rng.randint(-2, 3)} for k in kinds]
 
 
+def _finale_modifiers(mode: str, chapter: int, slot: int) -> dict:
+    """slot is 0/1/2 for levels 13/14/15 of the chapter."""
+    rng = random.Random(_seed(f"finale::{mode}::{chapter}", slot))
+    return {
+        "piece": rng.choice(FINALE_PIECES),
+        "task": rng.choice(FINALE_TASKS),
+        "skin": rng.choice(FINALE_SKINS),
+        "constraint": rng.choice(FINALE_CONSTRAINTS),
+    }
+
+
+def _apply_finale(data: dict, shape: dict, mods: dict, rng: random.Random) -> None:
+    """Mutates a level dict in place with a finale's modifier axes. Reuses
+    existing mechanics (veils, bonus multiplier, timed countdown) rather than
+    inventing new match rules, so the core engine doesn't have to change."""
+    data["finalePiece"] = mods["piece"]
+    data["skin"] = mods["skin"]
+    data["finale"] = True
+
+    if mods["piece"] == "lockedChain":
+        extra = _place_veils(rng, shape["rows"], shape["cols"], 0.10)
+        existing = data["veil"]["cells"] if data.get("veil") else []
+        data["veil"] = {"cells": existing + extra}
+    elif mods["piece"] == "doublePoints":
+        data["bonusMultiplier"] = 2.0
+    elif mods["piece"] == "shrinking":
+        cells = [(r, c) for r in range(shape["rows"]) for c in range(shape["cols"])]
+        rng.shuffle(cells)
+        data["shrinkCells"] = [list(rc) for rc in cells[:4]]
+
+    if mods["task"] == "timed":
+        data["timedSeconds"] = 300  # 5:00 countdown; Freeze item pauses it 60s
+
+    if mods["constraint"] == "tighterMoves":
+        data["moves"] = max(8, round(data["moves"] * 0.85))
+    elif mods["constraint"] == "hazardTile":
+        extra = _place_veils(rng, shape["rows"], shape["cols"], 0.08)
+        existing = data["veil"]["cells"] if data.get("veil") else []
+        data["veil"] = {"cells": existing + extra}
+    elif mods["constraint"] == "raisedTarget":
+        data["target"] = round(data["target"] * 1.4)
+    elif mods["constraint"] == "moreColors":
+        data["colors"] = min(SYMBOL_COUNT, data["colors"] + 1)
+    # "noEasing" is intentionally a no-op marker here — the harder base
+    # target/moves for finales already comes from FINALE_EASE below.
+
+
+def _chapter_gate(mode: str, chapter: int) -> Optional[dict]:
+    """~40% of chapters get a star-gate; position (within the back third)
+    and threshold are both seeded, so it's unpredictable but consistent for
+    everyone on that chapter. None = no gate this chapter."""
+    rng = random.Random(_seed(f"gate::{mode}", chapter))
+    if rng.random() > 0.4:
+        return None
+    position = rng.randint(9, CHAPTER_SIZE - 1)  # 0-indexed, levels 10-15
+    max_stars_so_far = position * 3
+    threshold = round(max_stars_so_far * rng.uniform(0.55, 0.65))
+    return {"position": position, "starsRequired": threshold}
+
+
+# Finale levels (13-15 of every chapter) run a genuine harder spike, not
+# just a modifier flourish — less generous than the standard 0.90 baseline
+# (which is < 1.0, i.e. kinder-than-neutral). 1.08 sits on the *harder*
+# side of neutral: fewer bonus moves, more veils, a higher score bar,
+# since their bigger rewards should be earned. See _apply_finale.
+FINALE_EASE = 1.08
+
+
 @lru_cache(maxsize=4096)
 def get_level(mode: str, index: int) -> dict:
     if index < 0:
         index = 0
     rng = random.Random(_seed(mode, index))
-    shape = _ease(_curve_shape(index))
-    target, median = _calibrate_target(shape, rng)
+
+    slot_in_chapter = index % CHAPTER_SIZE
+    is_finale = slot_in_chapter >= CHAPTER_SIZE - 3
+    ease = FINALE_EASE if is_finale else DIFFICULTY_EASE
+    shape = _ease(_curve_shape(index), ease)
+
+    target, median = _calibrate_target(shape, rng, ease)
 
     objective = _objective_for_mode(mode)
     name = STORY_NAMES[index % len(STORY_NAMES)]
@@ -374,7 +467,7 @@ def get_level(mode: str, index: int) -> dict:
         objective=objective,
         target=target,
         difficulty_rating=_difficulty_rating(shape),
-        calibration={"simPlayouts": SIM_PLAYOUTS, "simMedianScore": median, "difficultyEase": DIFFICULTY_EASE},
+        calibration={"simPlayouts": SIM_PLAYOUTS, "simMedianScore": median, "difficultyEase": ease},
     )
 
     if objective == "collect":
@@ -383,10 +476,17 @@ def get_level(mode: str, index: int) -> dict:
     elif objective == "veil":
         cfg.veil = {"cells": _place_veils(rng, shape["rows"], shape["cols"], shape["veil_density"])}
 
-    return cfg.as_dict()
+    data = cfg.as_dict()
+    if is_finale:
+        chapter = index // CHAPTER_SIZE + 1
+        slot = slot_in_chapter - (CHAPTER_SIZE - 3)
+        mods = _finale_modifiers(mode, chapter, slot)
+        _apply_finale(data, shape, mods, rng)
+    return data
 
 
-def get_chapter(mode: str, chapter: int) -> list[dict]:
+def get_chapter(mode: str, chapter: int) -> dict:
     chapter = max(1, chapter)
     start = (chapter - 1) * CHAPTER_SIZE
-    return [get_level(mode, start + i) for i in range(CHAPTER_SIZE)]
+    levels = [get_level(mode, start + i) for i in range(CHAPTER_SIZE)]
+    return {"levels": levels, "gate": _chapter_gate(mode, chapter)}

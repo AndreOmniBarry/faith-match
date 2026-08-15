@@ -20,12 +20,15 @@ let veilGrid = [];
 let tilesById = new Map();
 let nextId = 1;
 let level = null;
-let score = 0, movesLeft = 0, comboStep = 0;
+let score = 0, movesLeft = 0, movesUsed = 0, comboStep = 0;
 let collectProgress = {};
 let veilTotal = 0;
 let busy = false;
 let swapAnchorCells = null;
 let callbacks = {};
+let comboMeter = 0;
+const COMBO_METER_CAP = 100;
+let wildcardUsed = false, shrinkTriggered = false;
 
 const sleep = (ms)=>new Promise(res=>setTimeout(res,ms));
 const rand = (n)=>Math.floor(Math.random()*n);
@@ -80,14 +83,39 @@ function hasPossibleMove(){
   }
   return false;
 }
+function swapPotential(r1,c1,r2,c2){
+  // How good is this move? Simulate it and measure the longer resulting run
+  // at each touched cell — cheap on a <=9x9 board, and enough to rank moves
+  // without a full cascade simulation.
+  const t1 = typeAt(r1,c1), t2 = typeAt(r2,c2);
+  const get = (r,c)=> (r===r1&&c===c1) ? t2 : (r===r2&&c===c2) ? t1 : typeAt(r,c);
+  const runAt = (r,c)=>{
+    const t = get(r,c); if(t<0) return 0;
+    let run=1, cc=c-1; while(cc>=0 && get(r,cc)===t){run++;cc--;}
+    cc=c+1; while(cc<cols && get(r,cc)===t){run++;cc++;}
+    let best=run;
+    run=1; let rr=r-1; while(rr>=0 && get(rr,c)===t){run++;rr--;}
+    rr=r+1; while(rr<rows && get(rr,c)===t){run++;rr++;}
+    return Math.max(best,run);
+  };
+  return runAt(r1,c1) + runAt(r2,c2);
+}
 function findValidSwapHint(){
+  // Best move, with a little randomness around it — always hinting the
+  // literal optimal swap would make the hint predictable/roboticfeeling;
+  // ranking then picking among the top few keeps it feeling alive.
+  const candidates = [];
   for(let r=0;r<rows;r++){
     for(let c=0;c<cols;c++){
-      if(c+1<cols && wouldMatch(r,c,r,c+1)) return [{r,c},{r,c:c+1}];
-      if(r+1<rows && wouldMatch(r,c,r+1,c)) return [{r,c},{r:r+1,c}];
+      if(c+1<cols && wouldMatch(r,c,r,c+1)) candidates.push({ a:{r,c}, b:{r,c:c+1}, score:swapPotential(r,c,r,c+1) });
+      if(r+1<rows && wouldMatch(r,c,r+1,c)) candidates.push({ a:{r,c}, b:{r:r+1,c}, score:swapPotential(r,c,r+1,c) });
     }
   }
-  return null;
+  if(!candidates.length) return null;
+  candidates.sort((x,y)=>y.score-x.score);
+  const pool = candidates.slice(0, Math.min(3, candidates.length));
+  const pick = pool[rand(pool.length)];
+  return [pick.a, pick.b];
 }
 
 /* ============================= BOARD GENERATION ============================= */
@@ -117,7 +145,10 @@ function buildInitialBoard(lvl){
         grid[r][c] = id;
       }
     }
-    if(lvl.objective==='veil' && lvl.veil && lvl.veil.cells){
+    // Veils aren't exclusive to Refiner's Fire: a finale's "Locked Chain"
+    // modifier layers a few onto any objective as an extra constraint —
+    // only the 'veil' objective actually requires clearing them to win.
+    if(lvl.veil && lvl.veil.cells){
       lvl.veil.cells.forEach(([r,c,layers])=>{
         if(r<rows && c<cols && grid[r][c]!=null){
           veilGrid[r][c] = layers;
@@ -471,6 +502,18 @@ async function resolveLoop(seed){
     crackAdjacentVeils(matchedSet);
 
     const creations = decideCreations(runs);
+
+    // Finale-only "Wildcard Blessing" modifier: once per level, even a plain
+    // match gets upgraded into a bonus Color Bomb — a surprise treat rather
+    // than a new match-detection rule, so it can't destabilize core matching.
+    if(level.finalePiece==='wildcard' && !wildcardUsed && runs.length>0 &&
+       creations.every(cr=>cr.special.kind!=='colorbomb')){
+      const anchor = pickAnchor(runs[0], swapAnchorCells);
+      creations.push({ r:anchor[0], c:anchor[1], special:{kind:'colorbomb'} });
+      wildcardUsed = true;
+      callbacks.onToast && callbacks.onToast('A Wildcard Blessing! ✨');
+    }
+
     const creationKeys = new Set(creations.map(cr=>cr.r+','+cr.c));
 
     tallyCollect(matchedSet, creationKeys);
@@ -494,6 +537,7 @@ async function resolveLoop(seed){
     const shakeMag = 2 + comboStep*1.6 + (activatedIds.size?5:0) + (matchedSet.size>=12?4:0);
     if(shakeMag>3) effects.shake(Math.min(16,shakeMag), 240 + Math.min(160,matchedSet.size*8));
 
+    comboMeter = Math.min(COMBO_METER_CAP, comboMeter + 12 + (activatedIds.size?25:0));
     notifyHUD();
     comboStep++;
 
@@ -568,6 +612,7 @@ async function resolveComboPair(tA, tB){
   }
 
   score += Math.round(bonus * (level.bonusMultiplier||1));
+  comboMeter = Math.min(COMBO_METER_CAP, comboMeter + 40);
   const {x,y} = render.cellCenter(pivot.r, pivot.c);
   effects.flash(vfxColor, 520);
   effects.shake(16, 380);
@@ -582,6 +627,27 @@ async function resolveComboPair(tA, tB){
 
   await clearCells([...cells]);
   await resolveLoop({});
+}
+
+function maybeTriggerShrink(){
+  if(shrinkTriggered || !level.shrinkCells || !level.shrinkCells.length) return;
+  if(movesUsed < Math.floor(level.moves/2)) return;
+  shrinkTriggered = true;
+  level.shrinkCells.forEach(([r,c])=>{
+    if(r<rows && c<cols && grid[r][c]!=null){
+      veilGrid[r][c] = (veilGrid[r][c]||0) + 1;
+      const t = tilesById.get(grid[r][c]);
+      t.veil = veilGrid[r][c];
+      render.refreshTileVisual(t);
+    }
+  });
+  callbacks.onToast && callbacks.onToast('The shrinking pieces have locked in tighter!');
+  audio.playVeilCrack();
+}
+function spendMove(){
+  movesLeft--; movesUsed++;
+  maybeTriggerShrink();
+  notifyHUD();
 }
 
 /* ============================= SWAP / INPUT ============================= */
@@ -616,19 +682,19 @@ async function attemptSwap(a,b){
   const specialA = tA.special, specialB = tB.special;
 
   if(specialA && specialB){
-    movesLeft--; notifyHUD();
+    spendMove();
     await resolveComboPair(tA, tB);
     checkEndConditions();
     return;
   }
   if(specialA && !specialB){
-    movesLeft--; notifyHUD();
+    spendMove();
     await resolveLoop({ singleActivation:{ tileId:tA.id, targetType:tB.type } });
     checkEndConditions();
     return;
   }
   if(specialB && !specialA){
-    movesLeft--; notifyHUD();
+    spendMove();
     await resolveLoop({ singleActivation:{ tileId:tB.id, targetType:tA.type } });
     checkEndConditions();
     return;
@@ -636,7 +702,7 @@ async function attemptSwap(a,b){
 
   const runs = findMatches();
   if(runs.length>0){
-    movesLeft--; notifyHUD();
+    spendMove();
     swapAnchorCells = [[b.r,b.c],[a.r,a.c]];
     await resolveLoop({});
     swapAnchorCells = null;
@@ -662,6 +728,7 @@ function getSessionState(){
   const state = {
     score, movesLeft: Math.max(movesLeft,0), comboStep,
     objective: level.objective, target: level.target,
+    comboMeter, comboMeterCap: COMBO_METER_CAP,
   };
   if(level.objective==='collect'){
     state.collect = level.collect.map(req=>({ type:req.type, count:req.count, collected: Math.min(req.count, collectProgress[req.type]||0) }));
@@ -682,10 +749,125 @@ function checkEndConditions(){
   if(won){
     setTimeout(()=>callbacks.onWin && callbacks.onWin(getSessionState()), 350);
   }else if(movesLeft<=0){
-    setTimeout(()=>callbacks.onLose && callbacks.onLose(getSessionState()), 350);
+    // busy stays true here on purpose — screens.js may offer a paid
+    // "continue" before the level is actually over; addMoves()/forceLose()
+    // are what release it.
+    setTimeout(()=>{
+      if(callbacks.onOutOfMoves) callbacks.onOutOfMoves(getSessionState());
+      else if(callbacks.onLose) callbacks.onLose(getSessionState());
+    }, 350);
   }else{
     busy = false;
   }
+}
+
+function addMoves(n){
+  movesLeft += n;
+  busy = false;
+  notifyHUD();
+}
+function forceLose(){
+  callbacks.onLose && callbacks.onLose(getSessionState());
+}
+
+/* ============================= COMBO METER + ITEMS ============================= */
+
+function getComboMeter(){ return comboMeter; }
+
+async function popComboMeter(){
+  if(comboMeter < COMBO_METER_CAP || busy) return false;
+  comboMeter = 0;
+  busy = true;
+  notifyHUD();
+  audio.playSpecialSound('combo');
+  effects.comboPopup(3);
+  const effect = ['hammerRandom','bonusMoves','freeColorBomb','scoreBurst'][rand(4)];
+
+  if(effect==='bonusMoves'){
+    movesLeft += 2;
+    effects.flash('var(--gold-soft)', 400);
+  }else if(effect==='scoreBurst'){
+    score += 300;
+    const {x,y} = render.cellCenter((rows/2)|0, (cols/2)|0);
+    effects.flash('var(--gold-soft)', 400);
+    effects.burst(x,y,'var(--gold-soft)','huge');
+  }else if(effect==='freeColorBomb'){
+    spawnFreeColorBomb();
+  }else{
+    const cr = rand(rows), cc = rand(cols);
+    const cells = [];
+    for(let r=cr-1;r<=cr+1;r++) for(let c=cc-1;c<=cc+1;c++){
+      if(r>=0&&r<rows&&c>=0&&c<cols) cells.push([r,c]);
+    }
+    const {x,y} = render.cellCenter(cr,cc);
+    effects.burst(x,y,'var(--wrapped-glow)','huge');
+    effects.ring(x,y,'var(--wrapped-glow)',6);
+    effects.shake(14,300);
+    const keys = cells.map(([r,c])=>r+','+c);
+    crackAdjacentVeils(new Set(keys));
+    tallyCollect(keys, new Set());
+    score += cells.length*20;
+    cells.forEach(([r,c])=>{ veilGrid[r][c] = 0; }); // the surge bypasses locks in its blast radius
+    await clearCells(cells);
+    await resolveLoop({});
+  }
+
+  notifyHUD();
+  checkEndConditions();
+  return true;
+}
+
+function spawnFreeColorBomb(){
+  const candidates = [];
+  for(let r=0;r<rows;r++) for(let c=0;c<cols;c++){
+    const id = grid[r][c];
+    if(id!=null && veilGrid[r][c]===0){
+      const t = tilesById.get(id);
+      if(!t.special) candidates.push(t);
+    }
+  }
+  if(!candidates.length) return false;
+  const t = candidates[rand(candidates.length)];
+  t.special = { kind:'colorbomb' };
+  render.refreshTileVisual(t);
+  t.el.classList.add('spawn-special');
+  triggerSpecialVFX(t);
+  return true;
+}
+
+// Inventory item effects — all bypass the move counter (that's what makes
+// them premium) and are no-ops while a resolve is already in flight.
+async function useHammer(r,c){
+  if(busy) return false;
+  busy = true;
+  const key = r+','+c;
+  const {x,y} = render.cellCenter(r,c);
+  effects.burst(x,y,'var(--wrapped-glow)','large');
+  effects.shake(10,220);
+  audio.playSpecialSound('wrapped');
+  veilGrid[r][c] = 0; // the hammer obliterates any lock instantly
+  crackAdjacentVeils(new Set([key]));
+  tallyCollect([key], new Set());
+  score += 50;
+  await clearCells([[r,c]]);
+  await resolveLoop({});
+  notifyHUD();
+  checkEndConditions();
+  return true;
+}
+function useRainbowShuffle(){
+  if(busy) return false;
+  reshuffleBoard();
+  effects.flash('var(--gold-soft)',400);
+  audio.playSpecialSound('striped');
+  notifyHUD();
+  return true;
+}
+function useColorBombGift(){
+  if(busy) return false;
+  const ok = spawnFreeColorBomb();
+  if(ok) audio.playSpecialSound('colorbomb');
+  return ok;
 }
 
 function starsFor(finalScore, target){
@@ -700,8 +882,9 @@ function starsFor(finalScore, target){
 function startLevel(lvl, boardEl){
   level = lvl;
   score = 0; comboStep = 0; busy = false; swapAnchorCells = null;
-  movesLeft = lvl.moves;
+  movesLeft = lvl.moves; movesUsed = 0;
   collectProgress = {};
+  comboMeter = 0; wildcardUsed = false; shrinkTriggered = false;
 
   render.setBoardEl(boardEl);
   buildInitialBoard(lvl);
@@ -751,4 +934,7 @@ export {
   startLevel, attemptSwap, resizeBoard,
   getSessionState, checkEndConditions, starsFor,
   isAdjacent, getIdleVisualTargets, getTileElAt,
+  addMoves, forceLose,
+  getComboMeter, popComboMeter,
+  useHammer, useRainbowShuffle, useColorBombGift,
 };

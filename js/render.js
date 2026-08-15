@@ -4,6 +4,7 @@
 // gives matches weight. Knows nothing about match rules — engine.js drives it.
 
 import { SYMBOLS } from './content.js';
+import { iconSVG } from './icons.js';
 
 let boardEl = null;
 let tileSize = 40;
@@ -44,7 +45,7 @@ function classFor(tile){
   return cls;
 }
 function innerHTMLFor(tile){
-  return `<div class="tile-inner" style="--tile-color:${SYMBOLS[tile.type].color}"><span class="tile-emoji">${SYMBOLS[tile.type].emoji}</span></div>${badgeFor(tile)}${veilBadge(tile)}`;
+  return `<div class="tile-inner" style="--tile-color:${SYMBOLS[tile.type].color}">${iconSVG(tile.type)}</div>${badgeFor(tile)}${veilBadge(tile)}`;
 }
 
 function createTileEl(tile, onPointerDown){
