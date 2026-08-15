@@ -1,0 +1,156 @@
+/* ============================= THEME / RESET ============================= */
+:root{
+  --bg-0:#120d21;
+  --bg-1:#1c1538;
+  --bg-2:#2a2049;
+  --gold:#e6b754;
+  --gold-soft:#f4d78c;
+  --rose:#f0836b;
+  --cream:#f8f0df;
+  --ink:#241a3a;
+  /* 8 symbol colors, spread across distinct hues on purpose — a player has
+     to tell them apart at a glance mid-cascade, so no two should share a
+     hue family the way the original 6-color set did (cross/heart both
+     landed on the same rose-red). */
+  --c-cross:#d84545;
+  --c-dove:#3d6cb9;
+  --c-heart:#e0498f;
+  --c-star:#e6b754;
+  --c-crown:#9668cc;
+  --c-hands:#3fa377;
+  --c-flame:#e8793f;
+  --c-anchor:#4aa8c9;
+  --line:#3d3163;
+  --veil:#6a6285;
+  --striped-glow:#ffffff;
+  --wrapped-glow:#f4d78c;
+  --colorbomb-glow:#c98bf0;
+  /* Set per-chapter by screens.js (js/theme.js) so stages read as visually
+     distinct from one another, not a re-skin of the same seven screens. */
+  --chapter-accent:var(--gold);
+  --font-display:'Cinzel', Georgia, 'Times New Roman', serif;
+  --font-body:'Quicksand','Nunito',system-ui,-apple-system,sans-serif;
+}
+
+*{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+html,body{height:100%;}
+body{
+  margin:0;
+  font-family:var(--font-body);
+  color:var(--cream);
+  background:
+    radial-gradient(ellipse at 50% -10%, #3a2a5c 0%, transparent 55%),
+    linear-gradient(180deg, var(--bg-0), var(--bg-1) 55%, var(--bg-0));
+  min-height:100%;
+  overflow-x:hidden;
+  user-select:none;
+  -webkit-user-select:none;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+h1,h2,h3{font-family:var(--font-display); margin:0; letter-spacing:.02em;}
+p{margin:0;}
+button{font-family:var(--font-body); border:none; cursor:pointer; -webkit-tap-highlight-color:transparent; background:none;}
+
+.app{
+  max-width:480px;
+  margin:0 auto;
+  min-height:100vh;
+  display:flex;
+  flex-direction:column;
+  position:relative;
+  z-index:1;
+}
+
+/* ---------- ambient living background ---------- */
+/* Slow drifting light behind everything, on every screen, so the app never
+   reads as a static image even when nothing else is animating. CSS-only —
+   no canvas, no JS cost. Tinted per-chapter via --chapter-accent. */
+.ambient-bg{
+  position:fixed; inset:0; z-index:0; pointer-events:none; overflow:hidden;
+}
+.ambient-bg span{
+  position:absolute;
+  width:46vmax; height:46vmax;
+  border-radius:50%;
+  background:radial-gradient(circle, color-mix(in srgb, var(--chapter-accent) 30%, transparent) 0%, transparent 70%);
+  filter:blur(2px);
+  animation:driftOrb 34s ease-in-out infinite;
+  opacity:.55;
+}
+.ambient-bg span:nth-child(1){ top:-18vmax; left:-14vmax; animation-duration:38s; }
+.ambient-bg span:nth-child(2){ bottom:-20vmax; right:-16vmax; animation-duration:44s; animation-delay:-12s;
+  background:radial-gradient(circle, color-mix(in srgb, var(--rose) 22%, transparent) 0%, transparent 70%); }
+.ambient-bg span:nth-child(3){ top:30%; left:60%; width:32vmax; height:32vmax; animation-duration:30s; animation-delay:-6s;
+  background:radial-gradient(circle, color-mix(in srgb, var(--gold-soft) 20%, transparent) 0%, transparent 70%); }
+@keyframes driftOrb{
+  0%,100%{ transform:translate(0,0) scale(1); }
+  33%{ transform:translate(4vmax,-3vmax) scale(1.08); }
+  66%{ transform:translate(-3vmax,4vmax) scale(0.96); }
+}
+@media (prefers-reduced-motion: reduce){
+  .ambient-bg span{ animation:none; }
+}
+
+.screen{
+  flex:1;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  padding:24px 20px 32px;
+  animation:fadeIn .35s ease both;
+}
+.screen.hidden{display:none;}
+@keyframes fadeIn{from{opacity:0; transform:translateY(6px);} to{opacity:1; transform:translateY(0);}}
+
+.glow-rays{
+  position:absolute; inset:0; z-index:-1; pointer-events:none;
+  background: repeating-conic-gradient(from 0deg, color-mix(in srgb, var(--chapter-accent) 20%, transparent) 0deg 6deg, transparent 6deg 12deg);
+  -webkit-mask-image: radial-gradient(circle at 50% 0%, black 0%, transparent 70%);
+  mask-image: radial-gradient(circle at 50% 0%, black 0%, transparent 70%);
+  animation: spin 90s linear infinite;
+}
+@keyframes spin{ to{ transform:rotate(360deg); } }
+
+.icon-btn{
+  width:38px; height:38px; border-radius:12px;
+  background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.14);
+  display:flex; align-items:center; justify-content:center; font-size:17px; color:var(--cream);
+  flex:none; transition:transform .12s ease;
+}
+.icon-btn:active{transform:scale(.92);}
+
+.btn-primary{
+  padding:16px 46px;
+  border-radius:40px;
+  background:linear-gradient(180deg, var(--gold-soft), var(--gold) 70%);
+  color:#2c1c0f;
+  font-weight:700;
+  font-size:17px;
+  letter-spacing:.03em;
+  box-shadow:0 10px 30px -8px rgba(230,183,84,.6), inset 0 1px 0 rgba(255,255,255,.5);
+  transition:transform .15s ease;
+}
+.btn-primary:active{transform:scale(.96);}
+.btn-ghost{
+  padding:12px 28px;
+  border-radius:40px;
+  background:rgba(255,255,255,.06);
+  border:1px solid rgba(255,255,255,.16);
+  color:var(--cream);
+  font-weight:600;
+  font-size:14px;
+  transition:transform .15s ease;
+}
+.btn-ghost:active{transform:scale(.96);}
+
+.toast{
+  position:fixed; left:50%; bottom:26px; transform:translateX(-50%);
+  background:rgba(20,15,33,.95); border:1px solid var(--line);
+  padding:10px 18px; border-radius:30px; font-size:13px; color:var(--cream);
+  z-index:60; box-shadow:0 10px 30px rgba(0,0,0,.5);
+}
+.toast.hidden{display:none;}
+
+@media (prefers-reduced-motion: reduce){
+  .glow-rays{animation:none;}
+}
