@@ -23,8 +23,7 @@ const screens = {
   loading:   $('screen-loading'),
   modes:     $('screen-modes'),
   dashboard: $('screen-dashboard'),
-  chapters:  $('screen-chapters'),
-  path:      $('screen-path'),
+  map:       $('screen-map'),
   game:      $('screen-game'),
 };
 
@@ -32,6 +31,12 @@ function showScreen(name){
   Object.values(screens).forEach(s=>s.classList.add('hidden'));
   screens[name].classList.remove('hidden');
   audio.playScreenIn();
+  // Every non-game screen shares the menu theme; runLevel() takes over
+  // with the per-mode gameplay loop once a level actually starts, and
+  // this naturally resumes the menu theme on any way back out (path,
+  // chapters, dashboard, splash) without each nav handler needing to
+  // know about audio.
+  if(name !== 'game') audio.playMenuTheme();
 }
 function showToast(msg, ms){
   const t = $('toast');
@@ -67,7 +72,7 @@ const LOADING_TIPS = [
   "A chapter's last three levels are always a little different.",
 ];
 
-let nav = { mode:null, chapter:1 };
+let nav = { mode:null };
 let currentLevel = null;
 let levelStartedAt = 0;
 let idleTimer = null;
@@ -191,12 +196,22 @@ async function openMode(mode){
     runLevel(daily.levels[Math.min(slot, daily.levels.length-1)]);
     return;
   }
-  nav.chapter = 1;
-  showScreen('chapters');
-  renderChapters();
+  showScreen('map');
+  renderWorldMap(mode);
 }
 
-/* ============================= CHAPTERS ============================= */
+/* ============================= WORLD MAP ============================= */
+// One continuous, page-scrolling trail through every chapter of a mode —
+// chapter "regions" are visually distinct banners (own accent color + a
+// motif icon), levels are nodes threaded along a smooth winding path
+// (an SVG curve drawn through their computed positions), replacing the
+// old two-step chapter-grid -> level-grid navigation.
+
+const MAP_NODE_GAP = 104;     // vertical px between consecutive level nodes
+const MAP_BANNER_H = 92;      // px reserved for each chapter's banner
+const MAP_CHAPTER_PAD = 26;   // px of breathing room after a chapter's last node
+const MAP_WAVE_AMP = 30;      // how far a node swings left/right, in % of track width
+const MAP_WAVE_STEP = (2*Math.PI)/6; // one full left-right-left cycle every 6 nodes
 
 function chapterStars(modeId, chapterNum){
   const start = (chapterNum-1)*CHAPTER_SIZE;
@@ -205,42 +220,6 @@ function chapterStars(modeId, chapterNum){
   return stars;
 }
 
-function renderChapters(){
-  theme.resetTheme();
-  const mode = modeById(nav.mode);
-  $('chapters-title').textContent = mode.name;
-  $('chapters-sub').textContent = mode.blurb;
-  const unlocked = state.getUnlockedCount(mode.id);
-  const unlockedChapters = Math.ceil(unlocked / CHAPTER_SIZE);
-  const ceilingChapters = Math.ceil(1000/CHAPTER_SIZE); // this build's documented content range
-  const totalToShow = Math.min(ceilingChapters, Math.max(3, unlockedChapters + 2));
-
-  const grid = $('chapter-grid');
-  grid.innerHTML = '';
-  for(let ch=1; ch<=totalToShow; ch++){
-    const start = (ch-1)*CHAPTER_SIZE;
-    const locked = start >= unlocked;
-    const stars = chapterStars(mode.id, ch);
-    const card = document.createElement('button');
-    card.className = 'chapter-card' + (locked?' locked':'');
-    card.innerHTML = `
-      <div class="ch-num">${locked?'🔒':'Chapter '+ch}</div>
-      <div class="ch-range">Levels ${start+1}–${start+CHAPTER_SIZE}</div>
-      <div class="ch-stars">${locked?'':'★ '+stars+' / '+(CHAPTER_SIZE*3)}</div>
-    `;
-    if(!locked) card.addEventListener('click', ()=>openChapter(ch));
-    grid.appendChild(card);
-  }
-}
-function openChapter(ch){
-  nav.chapter = ch;
-  theme.applyChapterTheme(ch);
-  showScreen('path');
-  renderPath();
-}
-
-/* ============================= LEVEL PATH ============================= */
-
 function diffColor(rating){
   if(rating==null) return '#4a3f6e';
   if(rating < 0.35) return '#3fa377';
@@ -248,44 +227,125 @@ function diffColor(rating){
   return '#d8455f';
 }
 
-async function renderPath(){
-  const mode = modeById(nav.mode);
-  $('path-title').textContent = `Chapter ${nav.chapter}`;
-  $('path-sub').textContent = mode.name;
-  const grid = $('lvl-grid');
-  grid.innerHTML = '<div style="color:#9c8fc3;font-size:13px;padding:20px;">Loading levels…</div>';
+// Builds the node/banner layout for one continuous map spanning every
+// chapter passed in. Coordinates: x in track-width percent (0-100), y in
+// px — the SVG trail below is drawn in the same units so it lines up with
+// the DOM nodes exactly.
+function buildMapLayout(chaptersData){
+  let y = 34;
+  let globalIdx = 0;
+  const nodes = [], banners = [];
+  chaptersData.forEach(({ chapterNum, levels, gate })=>{
+    banners.push({ chapterNum, y });
+    y += MAP_BANNER_H;
+    levels.forEach((level, slotIdx)=>{
+      const x = 50 + MAP_WAVE_AMP*Math.sin(globalIdx*MAP_WAVE_STEP);
+      nodes.push({ level, chapterNum, slotIdx, gate, x, y });
+      y += MAP_NODE_GAP;
+      globalIdx++;
+    });
+    y += MAP_CHAPTER_PAD;
+  });
+  return { nodes, banners, totalHeight: y + 40 };
+}
 
-  const { levels, gate } = await getChapter(mode.id, nav.chapter);
+// Smooth curve through every node center, via the standard "quadratic
+// through-point" trick: each segment ends at the midpoint between two
+// nodes with the node itself as the control point, so the path bends
+// naturally at every stop instead of kinking in straight lines.
+function buildMapPathD(points){
+  if(points.length < 2) return '';
+  let d = `M${points[0].x},${points[0].y}`;
+  for(let i=0;i<points.length-1;i++){
+    const p0=points[i], p1=points[i+1];
+    d += ` Q${p0.x},${p0.y} ${(p0.x+p1.x)/2},${(p0.y+p1.y)/2}`;
+  }
+  const last = points[points.length-1];
+  d += ` L${last.x},${last.y}`;
+  return d;
+}
+
+async function renderWorldMap(mode){
+  theme.resetTheme();
+  $('map-title').textContent = mode.name;
+  $('map-sub').textContent = mode.blurb;
+  const track = $('map-track');
+  track.style.height = '';
+  track.innerHTML = '<div class="map-loading">Charting the path…</div>';
+
   const unlocked = state.getUnlockedCount(mode.id);
-  const starsSoFar = chapterStars(mode.id, nav.chapter);
+  const unlockedChapters = Math.ceil(unlocked / CHAPTER_SIZE);
+  const ceilingChapters = Math.ceil(1000/CHAPTER_SIZE); // this build's documented content range
+  const totalToShow = Math.min(ceilingChapters, Math.max(3, unlockedChapters + 2));
 
-  grid.innerHTML = '';
-  levels.forEach((level, slotIdx)=>{
+  const chapterNums = Array.from({ length: totalToShow }, (_, i)=>i+1);
+  const chaptersData = await Promise.all(chapterNums.map(async ch=>{
+    const { levels, gate } = await getChapter(mode.id, ch);
+    return { chapterNum: ch, levels, gate };
+  }));
+  if(nav.mode !== mode.id) return; // player navigated away while this was loading
+
+  const { nodes, banners, totalHeight } = buildMapLayout(chaptersData);
+  track.style.height = totalHeight + 'px';
+  track.innerHTML = `<svg class="map-path-svg" viewBox="0 0 100 ${totalHeight}" preserveAspectRatio="none">
+    <path d="${buildMapPathD(nodes.map(n=>({x:n.x,y:n.y})))}" fill="none" stroke="rgba(230,183,84,.32)" stroke-width="2.4" stroke-dasharray="1.4 8" stroke-linecap="round"/>
+  </svg>`;
+
+  banners.forEach(b=>{
+    const el = document.createElement('div');
+    el.className = 'map-chapter-banner';
+    el.style.top = b.y + 'px';
+    el.style.setProperty('--band-color', theme.chapterColor(b.chapterNum));
+    el.innerHTML = `<span class="band-icon">${SYMBOLS[(b.chapterNum-1)%SYMBOLS.length].emoji}</span><span class="band-text">Chapter ${b.chapterNum}</span>`;
+    track.appendChild(el);
+  });
+
+  let currentNodeEl = null;
+  nodes.forEach(n=>{
+    const { level, chapterNum, slotIdx, gate } = n;
     const idx = level.index;
+    const starsSoFar = chapterStars(mode.id, chapterNum);
     const gateBlocked = gate && slotIdx >= gate.position && starsSoFar < gate.starsRequired;
     const locked = idx >= unlocked || gateBlocked;
     const stars = state.getStars(mode.id, idx);
-    const isCurrent = !locked && idx === Math.min(unlocked-1, levels[levels.length-1].index);
-    const card = document.createElement('button');
-    card.className = 'lvl-card'
-      + (locked?' locked':'')
-      + (isCurrent?' current':'')
-      + (gateBlocked?' gated':'')
-      + (level.finale?' finale':'');
-    card.style.setProperty('--diff-color', diffColor(level.difficultyRating));
+    const isCurrent = !locked && idx === unlocked-1;
+
+    const btn = document.createElement('button');
+    btn.className = 'map-node'
+      + (locked?' locked':'') + (isCurrent?' current':'')
+      + (gateBlocked?' gated':'') + (level.finale?' finale':'');
+    btn.style.left = n.x + '%';
+    btn.style.top = n.y + 'px';
+    btn.style.setProperty('--chapter-accent', theme.chapterColor(chapterNum));
+    btn.style.setProperty('--diff-color', diffColor(level.difficultyRating));
     if(gateBlocked){
-      card.innerHTML = `<div class="num">🔒</div><div class="gate-req">Need ★${gate.starsRequired} in this chapter</div>`;
+      btn.innerHTML = `<div class="mn-icon">🔒</div><div class="mn-gate">★${gate.starsRequired}</div>`;
+      btn.addEventListener('click', ()=>{ audio.playGateSting(); showToast(`Earn ★${gate.starsRequired} in this chapter to open it.`, 1800); });
     }else{
-      card.innerHTML = `
+      btn.innerHTML = `
         <div class="diff-dot"></div>
-        <div class="num">${locked?'🔒':idx+1}</div>
-        <div class="stars">${locked?'':'★'.repeat(stars)+'☆'.repeat(3-stars)}</div>
+        <div class="mn-icon">${locked?'🔒':(level.finale?'✦':idx+1)}</div>
+        ${locked?'':`<div class="mn-stars">${'★'.repeat(stars)}${'☆'.repeat(3-stars)}</div>`}
       `;
+      if(!locked) btn.addEventListener('click', ()=>runLevel(level));
     }
-    if(!locked) card.addEventListener('click', ()=>runLevel(level));
-    else if(gateBlocked) card.addEventListener('click', ()=>{ audio.playGateSting(); showToast(`Earn ★${gate.starsRequired} in this chapter to open it.`, 1800); });
-    grid.appendChild(card);
+    track.appendChild(btn);
+    if(isCurrent) currentNodeEl = btn;
   });
+
+  requestAnimationFrame(()=>{
+    (currentNodeEl || track.lastElementChild)?.scrollIntoView({ block:'center', behavior:'smooth' });
+  });
+}
+
+// Shared "leave the game screen for the current mode's map" path — used by
+// the win/lose modals' Level Select button and the in-game back arrow.
+function backToMap(modeId){
+  const mode = modeById(modeId);
+  if(!mode) return goModes();
+  nav.mode = modeId;
+  showScreen('map');
+  renderWorldMap(mode);
 }
 
 /* ============================= GAME: chrome + HUD ============================= */
@@ -624,6 +684,11 @@ async function runLevel(level){
   currentLevel = level;
   showScreen('game');
   renderGameChrome(level);
+  // The world map shows every chapter's own accent color inline per-node;
+  // gameplay itself still needs the single global --chapter-accent (board
+  // frame glow, etc.) set to whichever chapter this level belongs to.
+  if(level.mode!=='daily-blessing' && level.index!=null) theme.applyChapterTheme(Math.floor(level.index/CHAPTER_SIZE)+1);
+  else theme.resetTheme();
   if(level.finale && level.skin) theme.applyFinaleSkin(level.skin);
 
   const boardEl = $('board');
@@ -649,7 +714,7 @@ async function runLevel(level){
   levelStartedAt = Date.now();
   startIdleLoop();
   startTimer(level);
-  audio.startAmbientPad();
+  audio.startAmbientPad(level.mode);
   if(level.finale) audio.playFinaleSting();
 }
 
@@ -727,7 +792,7 @@ function onLevelWin(s){
   const pathBtn = document.createElement('button');
   pathBtn.className = 'btn-ghost';
   pathBtn.textContent = currentLevel.mode==='daily-blessing' ? 'Back to Modes' : 'Level Select';
-  pathBtn.addEventListener('click', ()=>{ closeModal(); currentLevel.mode==='daily-blessing' ? goModes() : renderPath().then(()=>showScreen('path')); });
+  pathBtn.addEventListener('click', ()=>{ closeModal(); currentLevel.mode==='daily-blessing' ? goModes() : backToMap(currentLevel.mode); });
   actions.appendChild(pathBtn);
 
   openModal();
@@ -758,7 +823,7 @@ function onLevelLose(s, timedOut){
   const pathBtn = document.createElement('button');
   pathBtn.className = 'btn-ghost';
   pathBtn.textContent = currentLevel.mode==='daily-blessing' ? 'Back to Modes' : 'Level Select';
-  pathBtn.addEventListener('click', ()=>{ closeModal(); currentLevel.mode==='daily-blessing' ? goModes() : renderPath().then(()=>showScreen('path')); });
+  pathBtn.addEventListener('click', ()=>{ closeModal(); currentLevel.mode==='daily-blessing' ? goModes() : backToMap(currentLevel.mode); });
   actions.appendChild(pathBtn);
 
   openModal();
@@ -786,11 +851,10 @@ function initNav(){
   $('btn-sound-game').addEventListener('click', toggleSound);
   $('btn-dashboard').addEventListener('click', ()=>{ audio.playUiTap(); renderDashboard(); showScreen('dashboard'); });
   $('btn-back-dashboard').addEventListener('click', ()=>{ goModes(); });
-  $('btn-back-chapters').addEventListener('click', ()=>{ stopIdleLoop(); goModes(); });
-  $('btn-back-path').addEventListener('click', ()=>{ stopIdleLoop(); showScreen('chapters'); renderChapters(); });
+  $('btn-back-map').addEventListener('click', ()=>{ stopIdleLoop(); goModes(); });
   $('btn-back-game').addEventListener('click', ()=>{
     stopIdleLoop(); stopTimer(); audio.stopAmbientPad();
-    (nav.mode==='daily-blessing' || currentLevel?.mode==='daily-blessing') ? goModes() : (renderPath(), showScreen('path'));
+    (nav.mode==='daily-blessing' || currentLevel?.mode==='daily-blessing') ? goModes() : backToMap(currentLevel?.mode ?? nav.mode);
   });
   $('btn-inventory').addEventListener('click', ()=>{ audio.playUiTap(); openTray(); });
   $('btn-tray-close').addEventListener('click', ()=>{ audio.playUiTap(); closeTray(); });
