@@ -81,31 +81,26 @@ function playSwapStretch(tile){
 function renderFullBoard(rows, cols, grid, tilesById, onPointerDown){
   boardEl.innerHTML = '';
   measureTileSize(cols);
+  // Deal-in: a staggered 3D flip per tile (see css/board.css .deal-in),
+  // instead of a flat opacity tween — a bit of flourish on the one moment
+  // (board load) that can afford it without adding motion to every cascade.
+  let i = 0;
   for(let r=0;r<rows;r++){
     for(let c=0;c<cols;c++){
       const tile = tilesById.get(grid[r][c]);
       const el = createTileEl(tile, onPointerDown);
       tile.el = el;
       setTileTransform(el, r, c);
-      el.style.opacity = '0';
-      el.style.transition = 'none';
+      el.classList.add('deal-in');
+      el.style.setProperty('--deal-delay', (i*14)+'ms');
       boardEl.appendChild(el);
+      i++;
     }
   }
-  requestAnimationFrame(()=>{
-    let i=0;
-    for(let r=0;r<rows;r++){
-      for(let c=0;c<cols;c++){
-        const tile = tilesById.get(grid[r][c]);
-        const el = tile.el;
-        setTimeout(()=>{
-          el.style.transition = 'opacity .3s ease, transform .28s cubic-bezier(.34,1.15,.64,1)';
-          el.style.opacity = '1';
-        }, i*6);
-        i++;
-      }
-    }
-  });
+  const totalDealMs = i*14 + 500;
+  setTimeout(()=>{
+    boardEl.querySelectorAll('.tile.deal-in').forEach(el=>el.classList.remove('deal-in'));
+  }, totalDealMs);
 }
 
 function removeTileEl(tile){

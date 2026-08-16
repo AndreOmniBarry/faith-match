@@ -4,7 +4,7 @@
 // shake, a radial flash for the biggest activations, and idle-time board
 // life (shimmer + a hint sparkle) so the board never looks dead between moves.
 
-let canvas, ctx, boardArch, flashLayer, comboPopupEl, confettiLayerEl;
+let canvas, ctx, boardArch, flashLayer, comboPopupEl, confettiLayerEl, ambientBg;
 let particles = [];
 let rafId = null;
 
@@ -27,6 +27,7 @@ function init(elements){
   flashLayer = elements.flashLayer;
   comboPopupEl = elements.comboPopupEl;
   confettiLayerEl = elements.confettiLayerEl;
+  ambientBg = elements.ambientBg || document.querySelector('.ambient-bg');
 }
 
 function resizeCanvas(){
@@ -63,6 +64,13 @@ function ensureLoop(){
       }else if(p.kind==='beam'){
         ctx.strokeStyle = p.color;
         ctx.lineWidth = p.width;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(p.x1,p.y1); ctx.lineTo(p.x2,p.y2);
+        ctx.stroke();
+      }else if(p.kind==='trail'){
+        ctx.strokeStyle = p.color;
+        ctx.lineWidth = p.width * Math.max(0.15, alpha);
         ctx.lineCap = 'round';
         ctx.beginPath();
         ctx.moveTo(p.x1,p.y1); ctx.lineTo(p.x2,p.y2);
@@ -125,6 +133,23 @@ function beam(x1, y1, x2, y2, color){
   ensureLoop();
 }
 
+// Short motion streak — the trail a tile leaves behind while swapping, so a
+// swap reads as *motion* rather than a teleport between two positions.
+function trail(x1, y1, x2, y2, color){
+  if(!canvas) return;
+  particles.push({ kind:'trail', x1,y1,x2,y2, width:5, color:resolveColor(color), life:1, decay:0.12 });
+  ensureLoop();
+}
+
+// A burst followed by a smaller delayed second burst — a "bloom" instead of
+// a single pop, for the moments that should feel like a bigger deal
+// (wrapped/color-bomb activations, combo pairs).
+function bloom(x, y, color, tier){
+  burst(x, y, color, tier);
+  ring(x, y, color, 4);
+  setTimeout(()=>{ burst(x, y, color, tier==='huge' ? 'medium' : 'small'); }, 90);
+}
+
 function shake(magnitude, duration){
   if(!boardArch) return;
   boardArch.classList.add('shaking');
@@ -145,13 +170,23 @@ function shake(magnitude, duration){
   requestAnimationFrame(frame);
 }
 
-function flash(color, duration){
+function flash(color, duration, variant){
   if(!flashLayer) return;
+  const cls = variant==='ripple' ? 'ripple' : 'pulse';
   flashLayer.style.setProperty('--flash-color', color);
   flashLayer.style.setProperty('--flash-dur', duration+'ms');
-  flashLayer.classList.remove('pulse');
+  flashLayer.classList.remove('pulse','ripple');
   void flashLayer.offsetWidth;
-  flashLayer.classList.add('pulse');
+  flashLayer.classList.add(cls);
+}
+
+// Briefly brightens the ambient background — the room itself reacting to a
+// big moment, not just the board.
+function pulseAmbient(duration){
+  if(!ambientBg) return;
+  ambientBg.classList.add('charged');
+  clearTimeout(pulseAmbient._h);
+  pulseAmbient._h = setTimeout(()=>ambientBg.classList.remove('charged'), duration||900);
 }
 
 const COMBO_WORDS = ['Blessed!','Grace!','Hallelujah!','Faithful!','Radiant!','Wondrous!','Glory!','Anointed!'];
@@ -199,6 +234,6 @@ function hintSparkle(elA, elB){
 }
 
 export {
-  init, resizeCanvas, burst, ring, beam, shake, flash,
+  init, resizeCanvas, burst, ring, beam, trail, bloom, shake, flash, pulseAmbient,
   comboPopup, confettiBurst, idleShimmer, hintSparkle,
 };
