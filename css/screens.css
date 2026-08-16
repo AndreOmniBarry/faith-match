@@ -206,11 +206,17 @@
   background:
     radial-gradient(ellipse 70% 55% at 30% 20%, color-mix(in srgb, var(--band-color) 16%, transparent) 0%, transparent 70%),
     radial-gradient(ellipse 60% 45% at 75% 70%, color-mix(in srgb, var(--band-color) 12%, transparent) 0%, transparent 70%);
+  animation:washBreathe 9s ease-in-out infinite;
 }
+@keyframes washBreathe{ 0%,100%{ opacity:.85; } 50%{ opacity:1; } }
 
 .map-path-svg{ position:absolute; inset:0; width:100%; height:100%; pointer-events:none; z-index:1; }
 .map-path-glow{ stroke:var(--gold-soft); stroke-width:7; opacity:.28; filter:blur(3px); }
 .map-path-line{ stroke:rgba(255,244,214,.75); stroke-width:1.6; stroke-dasharray:1.4 7; }
+/* Lights that continuously travel the trail (see js/screens.js's
+   animateMotion elements) — the map's own sense of "something is
+   happening here", not just a static diagram players tap on. */
+.map-flow-dot{ fill:var(--gold-soft); filter:drop-shadow(0 0 3px var(--gold-soft)); opacity:.9; }
 
 .map-chapter-banner{
   position:absolute; left:0; right:0; height:92px;
@@ -239,26 +245,42 @@
   background:radial-gradient(ellipse, rgba(0,0,0,.45) 0%, transparent 72%);
 }
 
+/* .map-node is a pure anchor box (position + size only) so its
+   translate(-50%,-50%) centering transform never has to fight the idle
+   bob or tap-feedback animations, both of which live one level down on
+   .mn-inner — three independent transform layers (anchor / bob / tap)
+   instead of one property everything tries to share. */
 .map-node{
-  position:absolute; transform:translate(-50%,-50%);
-  width:58px; height:58px; border-radius:50%;
+  position:absolute;
+  width:58px; height:58px;
+  z-index:3;
+  transform:translate(-50%,-50%);
+}
+.map-node .mn-inner{
+  position:absolute; inset:0; border-radius:50%;
   display:flex; flex-direction:column; align-items:center; justify-content:center; gap:1px;
   background:radial-gradient(circle at 32% 28%, color-mix(in srgb, var(--chapter-accent) 55%, white 12%), var(--bg-2) 72%);
   border:2px solid color-mix(in srgb, var(--chapter-accent) 70%, var(--line));
   box-shadow:0 6px 16px rgba(0,0,0,.4), inset 0 2px 3px rgba(255,255,255,.18);
-  z-index:3; transition:transform .12s cubic-bezier(.3,1.4,.5,1);
+  animation:nodeBob 3.6s ease-in-out infinite;
+  animation-delay:var(--bob-delay, 0s);
+  transition:transform .12s cubic-bezier(.3,1.4,.5,1);
 }
-.map-node:active{ transform:translate(-50%,-50%) scale(.9); }
+.map-node:active .mn-inner{ transform:scale(.9); }
+@keyframes nodeBob{ 0%,100%{ transform:translateY(0); } 50%{ transform:translateY(-3px); } }
+@media (prefers-reduced-motion: reduce){
+  .map-node .mn-inner{ animation:none; }
+}
 .map-node .mn-icon{ font-family:var(--font-display); font-size:18px; color:var(--cream); }
 .map-node .mn-stars{ font-size:9px; color:var(--gold); letter-spacing:1px; }
 .map-node .diff-dot{ position:absolute; top:1px; right:3px; width:7px; height:7px; border-radius:50%; background:var(--diff-color,#4a3f6e); border:1px solid rgba(0,0,0,.4); }
-.map-node.locked{ background:var(--bg-2); border-color:var(--line); opacity:.45; }
+.map-node.locked .mn-inner{ background:var(--bg-2); border-color:var(--line); opacity:.45; }
 .map-node.locked .mn-icon{ color:#7a6ea3; }
-.map-node.gated{ opacity:.7; }
+.map-node.gated .mn-inner{ opacity:.7; }
 .map-node.gated .mn-icon{ font-size:16px; }
 .map-node.gated .mn-gate{ font-size:9px; color:var(--gold-soft); }
-.map-node.finale{
-  width:66px; height:66px;
+.map-node.finale{ width:66px; height:66px; }
+.map-node.finale .mn-inner{
   border-color:var(--chapter-accent);
   box-shadow:0 0 22px color-mix(in srgb, var(--chapter-accent) 55%, transparent), 0 6px 16px rgba(0,0,0,.4);
 }

@@ -331,11 +331,21 @@ async function renderWorldMap(mode){
   }).join('');
 
   // Dual-layer path: a wide, blurred, low-opacity glow underneath a thin
-  // crisp line on top — a lit trail rather than a wireframe sketch.
+  // crisp line on top — a lit trail rather than a wireframe sketch. Three
+  // small lights travel the trail continuously (native SVG animateMotion —
+  // hardware-accelerated, no per-frame JS) so the map reads as a place
+  // with something actually happening in it, not a static diagram.
   const pathD = buildMapPathD(nodes.map(n=>({x:n.x,y:n.y})));
+  const flowDot = (dur, begin, r) => `
+    <circle r="${r}" class="map-flow-dot">
+      <animateMotion dur="${dur}s" begin="${begin}s" repeatCount="indefinite" rotate="auto">
+        <mpath href="#mapTrailPath"/>
+      </animateMotion>
+    </circle>`;
   const pathHTML = `<svg class="map-path-svg" viewBox="0 0 100 ${totalHeight}" preserveAspectRatio="none">
     <path d="${pathD}" class="map-path-glow" fill="none" stroke-linecap="round"/>
-    <path d="${pathD}" class="map-path-line" fill="none" stroke-linecap="round"/>
+    <path id="mapTrailPath" d="${pathD}" class="map-path-line" fill="none" stroke-linecap="round"/>
+    ${flowDot(9, 0, 1.6)}${flowDot(9, -3, 1.3)}${flowDot(9, -6, 1.1)}
   </svg>`;
 
   track.innerHTML = washesHTML + pathHTML;
@@ -381,15 +391,21 @@ async function renderWorldMap(mode){
     btn.style.top = n.y + 'px';
     btn.style.setProperty('--chapter-accent', theme.chapterColor(chapterNum));
     btn.style.setProperty('--diff-color', diffColor(level.difficultyRating));
+    // Own idle-bob timing per node (see .mn-inner's animation-delay) so
+    // the whole map doesn't bob in lockstep — deterministic off the
+    // node's own index, not Math.random(), so it's stable across re-renders.
+    btn.style.setProperty('--bob-delay', ((idx*0.37)%3.6).toFixed(2)+'s');
     if(gateBlocked){
-      btn.innerHTML = `<div class="mn-icon">🔒</div><div class="mn-gate">★${gate.starsRequired}</div>`;
+      btn.innerHTML = `<div class="mn-inner">
+        <div class="mn-icon">🔒</div><div class="mn-gate">★${gate.starsRequired}</div>
+      </div>`;
       btn.addEventListener('click', ()=>{ audio.playGateSting(); showToast(`Earn ★${gate.starsRequired} in this chapter to open it.`, 1800); });
     }else{
-      btn.innerHTML = `
+      btn.innerHTML = `<div class="mn-inner">
         <div class="diff-dot"></div>
         <div class="mn-icon">${locked?'🔒':(level.finale?'✦':idx+1)}</div>
         ${locked?'':`<div class="mn-stars">${'★'.repeat(stars)}${'☆'.repeat(3-stars)}</div>`}
-      `;
+      </div>`;
       if(!locked) btn.addEventListener('click', ()=>runLevel(level));
     }
     track.appendChild(btn);
