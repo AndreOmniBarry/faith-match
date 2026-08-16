@@ -627,14 +627,6 @@ async function runLevel(level){
   if(level.finale && level.skin) theme.applyFinaleSkin(level.skin);
 
   const boardEl = $('board');
-  effects.init({
-    canvas: $('fx-canvas'),
-    boardArch: $('board-arch'),
-    flashLayer: $('flash-layer'),
-    comboPopupEl: $('combo-popup'),
-    confettiLayerEl: $('confetti-layer'),
-  });
-
   engine.setCallbacks({
     onHUD: updateHUD,
     onToast: (msg)=>showToast(msg, 1400),
@@ -643,8 +635,17 @@ async function runLevel(level){
     onOutOfMoves: offerContinue,
   });
 
-  engine.startLevel(level, boardEl);
-  effects.resizeCanvas();
+  // Awaited: WebGL init + procedural tile textures are async on first use
+  // (see js/render.js getReady()) — effects.js needs the Pixi stage to
+  // already exist before it adds its own particle/flash layers to it.
+  await engine.startLevel(level, boardEl);
+
+  effects.init({
+    boardArch: $('board-arch'),
+    comboPopupEl: $('combo-popup'),
+    confettiLayerEl: $('confetti-layer'),
+  });
+
   levelStartedAt = Date.now();
   startIdleLoop();
   startTimer(level);

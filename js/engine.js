@@ -404,14 +404,8 @@ function collapseAndRefill(){
       tilesById.set(id, tile);
       const el = render.createTileEl(tile, onTilePointerDown);
       tile.el = el;
-      el.style.transition = 'none';
-      render.getBoardEl().appendChild(el);
-      render.setTileTransform(el, r-spawnOffset, c);
-      void el.offsetHeight;
-      requestAnimationFrame(()=>{
-        el.style.transition = '';
-        render.setTileTransform(el, r, c);
-      });
+      render.placeTileInstant(el, r-spawnOffset, c); // starts above the board, out of view
+      render.setTileTransform(el, r, c);              // tweens smoothly down into place
       grid[r][c] = id;
       landedTiles.push(tile);
       spawnOffset++;
@@ -884,7 +878,7 @@ function starsFor(finalScore, target){
 
 /* ============================= PUBLIC: LEVEL LIFECYCLE ============================= */
 
-function startLevel(lvl, boardEl){
+async function startLevel(lvl, boardEl){
   level = lvl;
   score = 0; comboStep = 0; busy = false; swapAnchorCells = null;
   movesLeft = lvl.moves; movesUsed = 0;
@@ -892,6 +886,7 @@ function startLevel(lvl, boardEl){
   comboMeter = 0; wildcardUsed = false; shrinkTriggered = false;
 
   render.setBoardEl(boardEl);
+  await render.getReady(); // WebGL init + procedural tile textures are async on first use
   buildInitialBoard(lvl);
   veilTotal = veilRemainingCount();
   render.renderFullBoard(rows, cols, grid, tilesById, (e)=>onTilePointerDown && onTilePointerDown(e));
@@ -901,18 +896,7 @@ function startLevel(lvl, boardEl){
 function resizeBoard(){
   if(!render.getBoardEl()) return;
   render.measureTileSize(cols);
-  tilesById.forEach(t=>{
-    if(t.el){
-      const size = render.getTileSize();
-      t.el.style.width = size+'px';
-      t.el.style.height = size+'px';
-      const prevTrans = t.el.style.transition;
-      t.el.style.transition = 'none';
-      render.setTileTransform(t.el, t.r, t.c);
-      void t.el.offsetHeight;
-      t.el.style.transition = prevTrans;
-    }
-  });
+  tilesById.forEach(t=>{ if(t.el) render.resizeTile(t.el, t.r, t.c); });
 }
 
 function getIdleVisualTargets(){
