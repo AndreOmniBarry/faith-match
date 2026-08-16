@@ -1,8 +1,8 @@
 /* ============================= TILE ICONS ============================= */
 // Hand-authored inline SVG glyphs, one per symbol — shape-coded, not just
-// color-coded, so tiles stay tellable-apart even for colorblind players
-// (a real gap in Candy Crush's similarly-round candies). Rendered as flat
-// cream silhouettes so they read clean against any tile-color gradient.
+// color-coded, so tiles stay tellable-apart at a glance for colorblind
+// players too. Rendered as flat cream silhouettes so they read clean
+// against any tile-color gradient.
 // viewBox is always 0 0 24 24.
 
 const PATHS = {

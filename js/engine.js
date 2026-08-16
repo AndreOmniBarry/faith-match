@@ -1,8 +1,8 @@
 /* ============================= MATCH ENGINE ============================= */
 // Grid state, match detection (including L/T-shaped intersections), special
-// tile creation, the Candy-Crush-style special-combo pairing table, the veil
-// obstacle mechanic (Refiner's Fire), collect-objective tallying, and the
-// cascade resolve loop. Talks to render.js for DOM/motion and effects.js /
+// tile creation, the special-combo pairing table (striped/wrapped/color-bomb
+// pairs), the veil obstacle mechanic (Refiner's Fire), collect-objective
+// tallying, and the cascade resolve loop. Talks to render.js for DOM/motion and effects.js /
 // audio.js for the "chaos" — this module is the rules, not the pixels.
 
 import * as render from './render.js';

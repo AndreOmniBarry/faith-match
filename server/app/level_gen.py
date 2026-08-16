@@ -6,8 +6,9 @@ phone webview: instead of hand-guessing "moves=18, target=5000" the way the
 original prototype did, every level is calibrated by *simulating* a batch of
 playouts of a candidate board and setting the target relative to what an
 average player would actually score. That's the "ahead of its time" bit the
-product asked for — Candy Crush (and this app's own original prototype)
-ships hand-tuned numbers; here the numbers are derived and reproducible.
+product asked for — most match-3 games (and this app's own original
+prototype) ship hand-tuned numbers; here the numbers are derived and
+reproducible.
 
 Everything here is deterministic for a given (mode, index): same seed in,
 same level out, forever. No external state, no network — safe to run in a
@@ -26,7 +27,7 @@ from typing import Optional
 # Tunables
 # ---------------------------------------------------------------------------
 
-# "Same ballpark difficulty as Candy Crush, ~10% kinder" — a single knob.
+# "Familiar match-3 difficulty, ~10% kinder" — a single knob.
 # >1.0 = more forgiving (more moves, lower targets). Tune here, not per-level.
 DIFFICULTY_EASE = 0.90
 
@@ -65,10 +66,11 @@ def _seed(mode: str, index: int) -> int:
 
 def _curve_shape(index: int) -> dict:
     """
-    Baseline shape before easing, loosely modeled on how Candy Crush ramps:
-    board grows, palette widens, move budget tightens — but with periodic
-    breather levels so the ramp never becomes a hard wall (that wall is what
-    causes the frustration/abandonment the product explicitly wants to avoid).
+    Baseline shape before easing, loosely modeled on how mobile match-3 games
+    typically ramp: board grows, palette widens, move budget tightens — but
+    with periodic breather levels so the ramp never becomes a hard wall
+    (that wall is what causes the frustration/abandonment the product
+    explicitly wants to avoid).
     """
     tier = index // 40  # every 40 levels, push the ceiling out a bit further
 
@@ -349,7 +351,7 @@ def _objective_for_mode(mode: str) -> str:
 
 def _difficulty_rating(shape: dict) -> float:
     """0..1 relative difficulty, exposed to the client for a difficulty badge
-    Candy Crush never bothers to show — small transparency win."""
+    most match-3 games never bother to show — small transparency win."""
     board_factor = (shape["rows"] * shape["cols"]) / (9 * 9)
     color_factor = shape["colors"] / SYMBOL_COUNT
     move_factor = 1 - min(1.0, shape["moves"] / 24)
