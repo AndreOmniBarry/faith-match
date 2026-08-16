@@ -92,8 +92,13 @@ function playScreenBack(){ playSfx('screen-back', { volume: 0.4 }); }
 function fadeTo(el, target, ms, onDone){
   const start = el.volume, t0 = performance.now();
   function step(t){
-    const p = Math.min(1, (t - t0) / ms);
-    el.volume = start + (target - start) * p;
+    // requestAnimationFrame's timestamp can, rarely, land fractionally
+    // before the performance.now() captured just before scheduling it —
+    // clamp both ends, and clamp the final value too as a second line of
+    // defense, since HTMLMediaElement.volume throws (not just clips) on
+    // anything outside [0,1].
+    const p = Math.max(0, Math.min(1, (t - t0) / ms));
+    el.volume = Math.max(0, Math.min(1, start + (target - start) * p));
     if(p < 1) requestAnimationFrame(step);
     else onDone && onDone();
   }
