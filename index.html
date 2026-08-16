@@ -65,24 +65,17 @@
     <div class="dash-stars" id="dash-stars"></div>
   </section>
 
-  <!-- CHAPTERS -->
-  <section class="screen hidden" id="screen-chapters">
-    <div class="back-row"><button class="icon-btn" id="btn-back-chapters">←</button><span class="crumb">Modes</span></div>
+  <!-- WORLD MAP: one continuous, scrollable trail through every chapter of
+       a mode — replaces the old two-step chapter-grid -> level-grid nav. -->
+  <section class="screen hidden" id="screen-map">
+    <div class="back-row"><button class="icon-btn" id="btn-back-map">←</button><span class="crumb">Modes</span></div>
     <div class="lvl-header">
-      <h2 id="chapters-title">Chapter Select</h2>
-      <p id="chapters-sub"></p>
+      <h2 id="map-title">World Map</h2>
+      <p id="map-sub"></p>
     </div>
-    <div class="chapter-grid" id="chapter-grid"></div>
-  </section>
-
-  <!-- LEVEL PATH -->
-  <section class="screen hidden" id="screen-path">
-    <div class="back-row"><button class="icon-btn" id="btn-back-path">←</button><span class="crumb" id="path-sub"></span></div>
-    <div class="lvl-header">
-      <h2 id="path-title">Chapter 1</h2>
-      <p>Match 4 for a Striped tile. An L/T shape wraps one. Match 5 for a Color Bomb.</p>
+    <div class="map-scroll">
+      <div class="map-track" id="map-track"></div>
     </div>
-    <div class="lvl-grid" id="lvl-grid"></div>
   </section>
 
   <!-- GAME SCREEN -->

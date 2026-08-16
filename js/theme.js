@@ -20,9 +20,11 @@ const FINALE_SKIN_COLORS = {
   hallowed:'#f4d78c', midnight:'#6c7ae0', harvest:'#c98b3f',
 };
 
+function chapterColor(chapterNum){
+  return CHAPTER_PALETTE[(Math.max(1,chapterNum)-1) % CHAPTER_PALETTE.length];
+}
 function applyChapterTheme(chapterNum){
-  const color = CHAPTER_PALETTE[(Math.max(1,chapterNum)-1) % CHAPTER_PALETTE.length];
-  document.documentElement.style.setProperty('--chapter-accent', color);
+  document.documentElement.style.setProperty('--chapter-accent', chapterColor(chapterNum));
 }
 function applyFinaleSkin(skinId){
   const color = FINALE_SKIN_COLORS[skinId];
@@ -32,4 +34,4 @@ function resetTheme(){
   document.documentElement.style.setProperty('--chapter-accent', CHAPTER_PALETTE[0]);
 }
 
-export { applyChapterTheme, applyFinaleSkin, resetTheme };
+export { applyChapterTheme, applyFinaleSkin, resetTheme, chapterColor };
