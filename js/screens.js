@@ -31,6 +31,12 @@ function showScreen(name){
   Object.values(screens).forEach(s=>s.classList.add('hidden'));
   screens[name].classList.remove('hidden');
   audio.playScreenIn();
+  // Every non-game screen shares the menu theme; runLevel() takes over
+  // with the per-mode gameplay loop once a level actually starts, and
+  // this naturally resumes the menu theme on any way back out (path,
+  // chapters, dashboard, splash) without each nav handler needing to
+  // know about audio.
+  if(name !== 'game') audio.playMenuTheme();
 }
 function showToast(msg, ms){
   const t = $('toast');
@@ -708,7 +714,7 @@ async function runLevel(level){
   levelStartedAt = Date.now();
   startIdleLoop();
   startTimer(level);
-  audio.startAmbientPad();
+  audio.startAmbientPad(level.mode);
   if(level.finale) audio.playFinaleSting();
 }
 
