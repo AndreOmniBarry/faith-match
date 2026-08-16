@@ -1,31 +1,12 @@
 /* ============================= SPLASH ============================= */
 #screen-splash{justify-content:center; text-align:center; position:relative; overflow:hidden;}
 
-/* Slow-drifting glints filling the space around the title instead of a
-   flat void — small radial glows, each on its own random-feeling
-   size/position/timing so they never read as a repeating tile. */
-.splash-sparkles{ position:absolute; inset:0; z-index:0; pointer-events:none; }
-.splash-sparkles span{
-  position:absolute; border-radius:50%;
-  background:radial-gradient(circle, var(--gold-soft) 0%, transparent 70%);
-  animation:sparkleDrift 7s ease-in-out infinite;
-  opacity:0;
-}
-.splash-sparkles span:nth-child(1){ width:5px; height:5px; top:14%; left:18%; animation-delay:0s; }
-.splash-sparkles span:nth-child(2){ width:3px; height:3px; top:22%; left:78%; animation-delay:.9s; }
-.splash-sparkles span:nth-child(3){ width:4px; height:4px; top:68%; left:12%; animation-delay:1.8s; }
-.splash-sparkles span:nth-child(4){ width:6px; height:6px; top:78%; left:82%; animation-delay:2.6s; }
-.splash-sparkles span:nth-child(5){ width:3px; height:3px; top:40%; left:8%; animation-delay:3.4s; background:radial-gradient(circle, var(--rose) 0%, transparent 70%); }
-.splash-sparkles span:nth-child(6){ width:4px; height:4px; top:34%; left:90%; animation-delay:4.1s; background:radial-gradient(circle, var(--c-anchor) 0%, transparent 70%); }
-.splash-sparkles span:nth-child(7){ width:5px; height:5px; top:60%; left:70%; animation-delay:5s; background:radial-gradient(circle, var(--c-crown) 0%, transparent 70%); }
-.splash-sparkles span:nth-child(8){ width:3px; height:3px; top:85%; left:40%; animation-delay:5.7s; }
-@keyframes sparkleDrift{
-  0%{ opacity:0; transform:translateY(0) scale(.6); }
-  15%{ opacity:.9; }
-  50%{ opacity:.5; transform:translateY(-22px) scale(1.3); }
-  85%{ opacity:0; }
-  100%{ opacity:0; transform:translateY(-40px) scale(.6); }
-}
+/* Real WebGL canvas — a compiled C++ particle-physics simulation
+   (native/particles.cpp -> WebAssembly, see js/splash-fx.js) renders here
+   instead of the fixed 8-span CSS sparkle animation this used to be.
+   Genuine per-particle physics (gravity, drag, orbital motion) and a real
+   GPU bloom pass, not keyframes. */
+.splash-fx-canvas{ position:absolute; inset:0; z-index:0; pointer-events:none; width:100%; height:100%; }
 
 /* Emblem: a layered stained-glass rosette instead of a flat icon-in-a-box —
    two counter-rotating rings (vector, no image asset) around the cross,
@@ -102,7 +83,9 @@
 .splash-motif .sm-swatch svg{ width:15px; height:15px; color:var(--cream); }
 @keyframes motifFloat{ 0%,100%{ transform:translateY(0); } 50%{ transform:translateY(-5px); } }
 @media (prefers-reduced-motion: reduce){
-  .splash-sparkles span, .emblem-ring, .brand-emblem, .splash-motif .sm-swatch{ animation:none; }
+  .emblem-ring, .brand-emblem, .splash-motif .sm-swatch{ animation:none; }
+  /* The WASM particle sim itself checks prefers-reduced-motion in
+     js/splash-fx.js and never starts stepping — nothing to disable here. */
 }
 
 /* ============================= LOADING ============================= */

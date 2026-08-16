@@ -13,6 +13,7 @@ import * as api from './api.js';
 import * as lives from './lives.js';
 import * as rewards from './rewards.js';
 import * as theme from './theme.js';
+import * as splashFx from './splash-fx.js';
 import { SYMBOLS, MODES, modeById, CHAPTER_SIZE, getLevel, getChapter, getDaily } from './content.js';
 import { iconSVG } from './icons.js';
 
@@ -40,6 +41,7 @@ function showScreen(name){
   if(name === 'map') audio.playMapTheme();
   else if(name !== 'game') audio.playMenuTheme();
   if(name === 'dashboard') startDashboardClock(); else stopDashboardClock();
+  if(name === 'splash') splashFx.start(); else splashFx.stop();
 }
 function showToast(msg, ms){
   const t = $('toast');
@@ -102,6 +104,8 @@ function initSplash(){
   renderSplashMotif();
   $('btn-play').addEventListener('click', ()=>{ audio.ensureAudio(); goLoading(); });
   $('btn-sound-splash').addEventListener('click', toggleSound);
+  splashFx.init($('splash-fx-canvas')).then(()=>{ splashFx.start(); });
+  window.addEventListener('resize', splashFx.resize);
 }
 
 function goLoading(){

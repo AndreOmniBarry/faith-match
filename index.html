@@ -7,9 +7,10 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <title>Faith Match</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700&family=Quicksand:wght@500;600;700&display=swap" rel="stylesheet">
+<!-- Vendored locally (js/vendor/fonts/) instead of a live Google Fonts
+     request — no external runtime dependency, works offline, and can't
+     stall page load if that network path is ever slow or unreachable. -->
+<link rel="stylesheet" href="js/vendor/fonts/fonts.css">
 <link rel="stylesheet" href="css/base.css">
 <link rel="stylesheet" href="css/screens.css">
 <link rel="stylesheet" href="css/board.css">
@@ -29,9 +30,10 @@
   <!-- SPLASH -->
   <section class="screen" id="screen-splash">
     <div class="glow-rays"></div>
-    <div class="splash-sparkles" aria-hidden="true">
-      <span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span>
-    </div>
+    <!-- Real WebGL canvas driven by a compiled C++ particle-physics core
+         (native/particles.cpp -> WebAssembly) — see js/splash-fx.js.
+         Replaces the old fixed 8-span CSS sparkle animation. -->
+    <canvas class="splash-fx-canvas" id="splash-fx-canvas" aria-hidden="true"></canvas>
     <div class="brand-emblem">
       <div class="emblem-ring emblem-ring-outer"></div>
       <div class="emblem-ring emblem-ring-inner"></div>
@@ -152,6 +154,9 @@
      guaranteed to be on window by the time js/render.js runs. -->
 <script src="js/vendor/pixi.min.js"></script>
 <script src="js/vendor/pixi-filters.js"></script>
+<!-- Compiled from native/particles.cpp via Emscripten — real C++ particle
+     physics running as WebAssembly, not JS. See js/splash-fx.js. -->
+<script src="js/vendor/particles.js"></script>
 <script type="module" src="js/main.js"></script>
 </body>
 </html>
