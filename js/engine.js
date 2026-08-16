@@ -773,8 +773,23 @@ function forceLose(){
 
 function getComboMeter(){ return comboMeter; }
 
+// Every branch below both raises the score AND tells the player exactly
+// what they got — a Surge should never read as "nothing happened". The
+// flavor differs (moves vs. a gifted special vs. a board-clearing blast),
+// but the score line and the toast are guaranteed every single time.
+const SURGE_BASE_BONUS = 120;
+
 async function popComboMeter(){
-  if(comboMeter < COMBO_METER_CAP || busy) return false;
+  if(comboMeter < COMBO_METER_CAP) return false;
+  // The meter shows "ready" the instant it hits the cap, but a cascade
+  // from the match that filled it can still be resolving (busy=true) for
+  // a few hundred ms after. A tap that lands in that window used to be
+  // silently dropped — the meter would sit there full and dead until the
+  // *next* match happened to catch it "not busy", which read as "does
+  // nothing" more often than not. Wait for the board to settle instead of
+  // discarding the tap.
+  for(let waited=0; busy && waited<1500; waited+=60) await sleep(60);
+  if(comboMeter < COMBO_METER_CAP || busy) return false; // still busy, or something else drained it meanwhile
   comboMeter = 0;
   busy = true;
   notifyHUD();
@@ -784,14 +799,19 @@ async function popComboMeter(){
 
   if(effect==='bonusMoves'){
     movesLeft += 2;
+    score += SURGE_BASE_BONUS;
     effects.flash('var(--gold-soft)', 400);
+    callbacks.onToast && callbacks.onToast(`Surge! +2 Moves and +${SURGE_BASE_BONUS} ✨`);
   }else if(effect==='scoreBurst'){
     score += 300;
     const {x,y} = render.cellCenter((rows/2)|0, (cols/2)|0);
     effects.flash('var(--gold-soft)', 400);
     effects.burst(x,y,'var(--gold-soft)','huge');
+    callbacks.onToast && callbacks.onToast('Surge! +300 ✨');
   }else if(effect==='freeColorBomb'){
+    score += SURGE_BASE_BONUS;
     spawnFreeColorBomb();
+    callbacks.onToast && callbacks.onToast(`Surge! Free Color Bomb gifted, +${SURGE_BASE_BONUS} ✨`);
   }else{
     const cr = rand(rows), cc = rand(cols);
     const cells = [];
@@ -805,10 +825,12 @@ async function popComboMeter(){
     const keys = cells.map(([r,c])=>r+','+c);
     crackAdjacentVeils(new Set(keys));
     tallyCollect(keys, new Set());
-    score += cells.length*20;
+    const gained = cells.length*20;
+    score += gained;
     cells.forEach(([r,c])=>{ veilGrid[r][c] = 0; }); // the surge bypasses locks in its blast radius
     await clearCells(cells);
     await resolveLoop({});
+    callbacks.onToast && callbacks.onToast(`Surge! +${gained} ✨`);
   }
 
   notifyHUD();

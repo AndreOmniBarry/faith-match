@@ -1,7 +1,7 @@
 /* ============================= PERSISTED STATE ============================= */
 // Per-mode progress (unlocked levels, stars) + global settings, saved through
-// window.storage when the host provides it, with an in-memory fallback so the
-// game still works (just doesn't persist) in a plain browser tab.
+// localStorage, with an in-memory fallback so the game still works (just
+// doesn't persist) if storage is unavailable (private browsing, quota, etc).
 
 const STORAGE_KEY = 'faithmatch_progress_v3';
 
@@ -20,12 +20,16 @@ function modeState(modeId){
   return state.modes[modeId];
 }
 
+function hasLocalStorage(){
+  try{ return typeof localStorage !== 'undefined'; }catch(e){ return false; }
+}
+
 async function loadState(){
-  if(!window.storage){ return state; }
+  if(!hasLocalStorage()) return state;
   try{
-    const res = await window.storage.get(STORAGE_KEY);
-    if(res && res.value){
-      const data = JSON.parse(res.value);
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if(raw){
+      const data = JSON.parse(raw);
       if(typeof data.soundOn === 'boolean') state.soundOn = data.soundOn;
       if(data.modes && typeof data.modes === 'object') Object.assign(state.modes, data.modes);
       if(typeof data.lives === 'number') state.lives = data.lives;
@@ -34,19 +38,19 @@ async function loadState(){
       if(data.inventory && typeof data.inventory === 'object') Object.assign(state.inventory, data.inventory);
       if(data.daily && typeof data.daily === 'object') Object.assign(state.daily, data.daily);
     }
-  }catch(e){ /* no saved progress yet — start fresh */ }
+  }catch(e){ /* corrupt or inaccessible storage — start fresh rather than crash */ }
   return state;
 }
 
 async function saveState(){
-  if(!window.storage) return;
+  if(!hasLocalStorage()) return;
   try{
-    await window.storage.set(STORAGE_KEY, JSON.stringify({
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({
       soundOn: state.soundOn, modes: state.modes,
       lives: state.lives, livesUpdatedAt: state.livesUpdatedAt,
       gems: state.gems, inventory: state.inventory, daily: state.daily,
     }));
-  }catch(e){ /* non-fatal */ }
+  }catch(e){ /* quota exceeded, private-mode restrictions, etc — non-fatal */ }
 }
 
 function getUnlockedCount(modeId){ return modeState(modeId).unlockedLevels; }

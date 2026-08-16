@@ -14,6 +14,7 @@ import * as lives from './lives.js';
 import * as rewards from './rewards.js';
 import * as theme from './theme.js';
 import { SYMBOLS, MODES, modeById, CHAPTER_SIZE, getLevel, getChapter, getDaily } from './content.js';
+import { iconSVG } from './icons.js';
 
 const $ = (id)=>document.getElementById(id);
 const rand = (n)=>Math.floor(Math.random()*n);
@@ -37,6 +38,7 @@ function showScreen(name){
   // chapters, dashboard, splash) without each nav handler needing to
   // know about audio.
   if(name !== 'game') audio.playMenuTheme();
+  if(name === 'dashboard') startDashboardClock(); else stopDashboardClock();
 }
 function showToast(msg, ms){
   const t = $('toast');
@@ -126,15 +128,15 @@ function updateStatusBar(){
 
 function renderDashboard(){
   updateStatusBar();
-  const ms = lives.msUntilNextLife();
   const grid = $('dash-grid');
   grid.innerHTML = `
-    <div class="dash-tile"><div class="dv">❤️ ${lives.getLives()}/${lives.getCap()}</div><div class="dl">Lives</div>
-      <div class="dsub">${ms>0 ? 'Next in '+lives.formatCountdown(ms) : 'Full'}</div></div>
+    <div class="dash-tile"><div class="dv" id="dash-lives-val"></div><div class="dl">Lives</div>
+      <div class="dsub" id="dash-lives-sub"></div></div>
     <div class="dash-tile"><div class="dv">💎 ${rewards.getGems()}</div><div class="dl">Gems</div></div>
     <div class="dash-tile"><div class="dv">🔥 ${rewards.getDailyStatus().streak}</div><div class="dl">Daily Streak</div></div>
     <div class="dash-tile"><div class="dv">${rewards.isDailySessionDone() ? 'Done' : 'Open'}</div><div class="dl">Today's Blessing</div></div>
   `;
+  tickDashboardLives();
   const inv = $('dash-inventory');
   const items = rewards.getInventory();
   const owned = Object.entries(items).filter(([,n])=>n>0);
@@ -148,6 +150,25 @@ function renderDashboard(){
     `<div class="dash-item">${m.icon} ${m.name} <strong>★${state.getTotalStars(m.id)}</strong></div>`
   ).join('');
 }
+
+// The "Next life in ⏱" line was only ever computed at render time — it sat
+// frozen until the player left and came back, reading as "not real time".
+// This ticks the two lives-related fields once a second while the
+// Dashboard is actually the visible screen (started/stopped from
+// showScreen(), same pattern as the audio menu-theme hookup).
+function tickDashboardLives(){
+  const val = $('dash-lives-val'), sub = $('dash-lives-sub');
+  if(!val || !sub) return;
+  const ms = lives.msUntilNextLife();
+  val.textContent = `❤️ ${lives.getLives()}/${lives.getCap()}`;
+  sub.textContent = ms>0 ? 'Next in '+lives.formatCountdown(ms) : 'Full';
+}
+let dashClockInterval = null;
+function startDashboardClock(){
+  stopDashboardClock();
+  dashClockInterval = setInterval(tickDashboardLives, 1000);
+}
+function stopDashboardClock(){ if(dashClockInterval){ clearInterval(dashClockInterval); dashClockInterval=null; } }
 
 /* ============================= MODE SELECT ============================= */
 
@@ -376,7 +397,8 @@ function renderGameChrome(level){
       const chip = document.createElement('div');
       chip.className = 'collect-chip';
       chip.id = 'collect-chip-'+req.type;
-      chip.innerHTML = `<span class="cc-emoji">${SYMBOLS[req.type].emoji}</span><span>0/${req.count}</span>`;
+      chip.style.setProperty('--cc-color', SYMBOLS[req.type].color);
+      chip.innerHTML = `<span class="cc-swatch">${iconSVG(req.type)}</span><span>0/${req.count}</span>`;
       row.appendChild(chip);
     });
   }
