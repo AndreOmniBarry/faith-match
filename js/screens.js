@@ -87,8 +87,17 @@ const IDLE_MS = 6000;
 
 /* ============================= SPLASH / LOADING ============================= */
 
+function renderSplashMotif(){
+  const row = $('splash-motif');
+  if(!row) return;
+  row.innerHTML = SYMBOLS.map((s,i)=>
+    `<span class="sm-swatch" style="--sm-color:${s.color}; animation-delay:${(i*0.18).toFixed(2)}s">${iconSVG(i)}</span>`
+  ).join('');
+}
+
 function initSplash(){
   refreshSoundButtons();
+  renderSplashMotif();
   $('btn-play').addEventListener('click', ()=>{ audio.ensureAudio(); goLoading(); });
   $('btn-sound-splash').addEventListener('click', toggleSound);
 }
