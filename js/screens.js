@@ -31,6 +31,7 @@ const screens = {
 function showScreen(name){
   Object.values(screens).forEach(s=>s.classList.add('hidden'));
   screens[name].classList.remove('hidden');
+  audio.playScreenIn();
 }
 function showToast(msg, ms){
   const t = $('toast');
@@ -282,6 +283,7 @@ async function renderPath(){
       `;
     }
     if(!locked) card.addEventListener('click', ()=>runLevel(level));
+    else if(gateBlocked) card.addEventListener('click', ()=>{ audio.playGateSting(); showToast(`Earn ★${gate.starsRequired} in this chapter to open it.`, 1800); });
     grid.appendChild(card);
   });
 }
@@ -646,6 +648,8 @@ async function runLevel(level){
   levelStartedAt = Date.now();
   startIdleLoop();
   startTimer(level);
+  audio.startAmbientPad();
+  if(level.finale) audio.playFinaleSting();
 }
 
 function submitResult(level, s, won){
@@ -664,7 +668,7 @@ function isChapterComplete(level, stars){
 }
 
 function onLevelWin(s){
-  stopIdleLoop(); stopTimer();
+  stopIdleLoop(); stopTimer(); audio.stopAmbientPad();
   const stars = engine.starsFor(s.score, currentLevel.target || 1);
   let rewardLines = [];
 
@@ -672,6 +676,7 @@ function onLevelWin(s){
     const result = rewards.advanceDailySession(s.score);
     if(result.reward){
       rewardLines.push(`💎${result.reward.gems} + ${rewards.ITEMS[result.reward.item].emoji} ${rewards.ITEMS[result.reward.item].name}`);
+      audio.playStreakSting(result.streak);
     }
   }else if(currentLevel.index!=null){
     state.recordCompletion(currentLevel.mode, currentLevel.index, stars);
@@ -728,7 +733,7 @@ function onLevelWin(s){
 }
 
 function onLevelLose(s, timedOut){
-  stopIdleLoop(); stopTimer();
+  stopIdleLoop(); stopTimer(); audio.stopAmbientPad();
   lives.loseLife();
   updateStatusBar();
   submitResult(currentLevel, s, false);
@@ -778,16 +783,16 @@ function toggleSound(){
 
 function initNav(){
   $('btn-sound-game').addEventListener('click', toggleSound);
-  $('btn-dashboard').addEventListener('click', ()=>{ renderDashboard(); showScreen('dashboard'); });
-  $('btn-back-dashboard').addEventListener('click', goModes);
+  $('btn-dashboard').addEventListener('click', ()=>{ audio.playUiTap(); renderDashboard(); showScreen('dashboard'); });
+  $('btn-back-dashboard').addEventListener('click', ()=>{ goModes(); });
   $('btn-back-chapters').addEventListener('click', ()=>{ stopIdleLoop(); goModes(); });
   $('btn-back-path').addEventListener('click', ()=>{ stopIdleLoop(); showScreen('chapters'); renderChapters(); });
   $('btn-back-game').addEventListener('click', ()=>{
-    stopIdleLoop(); stopTimer();
+    stopIdleLoop(); stopTimer(); audio.stopAmbientPad();
     (nav.mode==='daily-blessing' || currentLevel?.mode==='daily-blessing') ? goModes() : (renderPath(), showScreen('path'));
   });
-  $('btn-inventory').addEventListener('click', openTray);
-  $('btn-tray-close').addEventListener('click', closeTray);
+  $('btn-inventory').addEventListener('click', ()=>{ audio.playUiTap(); openTray(); });
+  $('btn-tray-close').addEventListener('click', ()=>{ audio.playUiTap(); closeTray(); });
   $('btn-combo-meter').addEventListener('click', ()=>{ engine.popComboMeter(); });
   engine.setPointerHandler(onBoardPointerDown);
   window.addEventListener('resize', ()=>{ engine.resizeBoard(); effects.resizeCanvas(); });

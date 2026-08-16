@@ -308,12 +308,11 @@ function triggerSpecialVFX(tile){
       effects.beam(a.x,a.y,b.x,b.y,'#ffffff');
     }
   }else if(tile.special.kind==='wrapped'){
-    effects.burst(x,y,'var(--wrapped-glow)','large');
-    effects.ring(x,y,'var(--wrapped-glow)',6);
+    effects.bloom(x,y,'var(--wrapped-glow)','large');
   }else if(tile.special.kind==='colorbomb'){
-    effects.burst(x,y,'var(--colorbomb-glow)','huge');
-    effects.ring(x,y,'var(--colorbomb-glow)',4);
-    effects.flash('var(--colorbomb-glow)', 480);
+    effects.bloom(x,y,'var(--colorbomb-glow)','huge');
+    effects.flash('var(--colorbomb-glow)', 480, 'ripple');
+    effects.pulseAmbient(700);
   }
 }
 
@@ -528,7 +527,8 @@ async function resolveLoop(seed){
     score += Math.round(roundPoints*multiplier);
 
     if(comboStep>=1) effects.comboPopup(comboStep+1);
-    audio.playMatchSound(comboStep);
+    const soundType = runs.length ? typeAt(runs[0].cells[0][0], runs[0].cells[0][1]) : null;
+    audio.playMatchSound(comboStep, soundType!=null && soundType>=0 ? soundType : undefined);
 
     runs.forEach(run=>{
       const [r,c] = run.cells[Math.floor(run.cells.length/2)];
@@ -536,6 +536,7 @@ async function resolveLoop(seed){
     });
     const shakeMag = 2 + comboStep*1.6 + (activatedIds.size?5:0) + (matchedSet.size>=12?4:0);
     if(shakeMag>3) effects.shake(Math.min(16,shakeMag), 240 + Math.min(160,matchedSet.size*8));
+    if(shakeMag>7) effects.pulseAmbient(600);
 
     comboMeter = Math.min(COMBO_METER_CAP, comboMeter + 12 + (activatedIds.size?25:0));
     notifyHUD();
@@ -614,10 +615,10 @@ async function resolveComboPair(tA, tB){
   score += Math.round(bonus * (level.bonusMultiplier||1));
   comboMeter = Math.min(COMBO_METER_CAP, comboMeter + 40);
   const {x,y} = render.cellCenter(pivot.r, pivot.c);
-  effects.flash(vfxColor, 520);
+  effects.flash(vfxColor, 520, 'ripple');
   effects.shake(16, 380);
-  effects.ring(x,y,vfxColor,8);
-  effects.burst(x,y,vfxColor,'huge');
+  effects.pulseAmbient(900);
+  effects.bloom(x,y,vfxColor,'huge');
   audio.playSpecialSound('combo');
   effects.comboPopup(2);
 
@@ -672,11 +673,15 @@ async function attemptSwap(a,b){
   const idA = grid[a.r][a.c], idB = grid[b.r][b.c];
   const tA = tilesById.get(idA), tB = tilesById.get(idB);
 
+  const fromA = render.cellCenter(a.r,a.c), toA = render.cellCenter(b.r,b.c);
+  const fromB = render.cellCenter(b.r,b.c), toB = render.cellCenter(a.r,a.c);
   grid[a.r][a.c] = idB; grid[b.r][b.c] = idA;
   tA.r=b.r; tA.c=b.c; tB.r=a.r; tB.c=a.c;
   render.setTileTransform(tA.el, tA.r, tA.c);
   render.setTileTransform(tB.el, tB.r, tB.c);
   render.playSwapStretch(tA); render.playSwapStretch(tB);
+  effects.trail(fromA.x,fromA.y,toA.x,toA.y, colorForType(tA.type));
+  effects.trail(fromB.x,fromB.y,toB.x,toB.y, colorForType(tB.type));
   await sleep(SWAP_MS);
 
   const specialA = tA.special, specialB = tB.special;
@@ -779,7 +784,7 @@ async function popComboMeter(){
   comboMeter = 0;
   busy = true;
   notifyHUD();
-  audio.playSpecialSound('combo');
+  audio.playSurgeSting();
   effects.comboPopup(3);
   const effect = ['hammerRandom','bonusMoves','freeColorBomb','scoreBurst'][rand(4)];
 
@@ -800,9 +805,9 @@ async function popComboMeter(){
       if(r>=0&&r<rows&&c>=0&&c<cols) cells.push([r,c]);
     }
     const {x,y} = render.cellCenter(cr,cc);
-    effects.burst(x,y,'var(--wrapped-glow)','huge');
-    effects.ring(x,y,'var(--wrapped-glow)',6);
+    effects.bloom(x,y,'var(--wrapped-glow)','huge');
     effects.shake(14,300);
+    effects.pulseAmbient(700);
     const keys = cells.map(([r,c])=>r+','+c);
     crackAdjacentVeils(new Set(keys));
     tallyCollect(keys, new Set());
