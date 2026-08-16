@@ -1,0 +1,20 @@
+/* Cinzel + Quicksand, vendored locally (latin subset only — this app's UI
+   text is English) instead of a live Google Fonts request. Same reasoning
+   as vendoring PixiJS locally: no external runtime dependency, works
+   offline, and doesn't stall page load if the network to fonts.googleapis.com
+   is slow/unreachable. One weight covers 500/600/700 for each family since
+   that's what Google itself was serving for all three anyway. */
+@font-face {
+  font-family: 'Cinzel';
+  font-style: normal;
+  font-weight: 500 700;
+  font-display: swap;
+  src: url('cinzel.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Quicksand';
+  font-style: normal;
+  font-weight: 500 700;
+  font-display: swap;
+  src: url('quicksand.woff2') format('woff2');
+}
