@@ -266,7 +266,7 @@ function buildMapLayout(chaptersData){
   let globalIdx = 0;
   const nodes = [], banners = [];
   chaptersData.forEach(({ chapterNum, levels, gate })=>{
-    banners.push({ chapterNum, y });
+    const bannerY = y;
     y += MAP_BANNER_H;
     levels.forEach((level, slotIdx)=>{
       const x = 50 + MAP_WAVE_AMP*Math.sin(globalIdx*MAP_WAVE_STEP);
@@ -275,6 +275,10 @@ function buildMapLayout(chaptersData){
       globalIdx++;
     });
     y += MAP_CHAPTER_PAD;
+    // regionEnd marks where this chapter's own background wash stops —
+    // lets each stretch of the map read as its own place rather than every
+    // chapter sitting on one flat, undifferentiated background.
+    banners.push({ chapterNum, y: bannerY, regionEnd: y });
   });
   return { nodes, banners, totalHeight: y + 40 };
 }
@@ -317,16 +321,35 @@ async function renderWorldMap(mode){
 
   const { nodes, banners, totalHeight } = buildMapLayout(chaptersData);
   track.style.height = totalHeight + 'px';
-  track.innerHTML = `<svg class="map-path-svg" viewBox="0 0 100 ${totalHeight}" preserveAspectRatio="none">
-    <path d="${buildMapPathD(nodes.map(n=>({x:n.x,y:n.y})))}" fill="none" stroke="rgba(230,183,84,.32)" stroke-width="2.4" stroke-dasharray="1.4 8" stroke-linecap="round"/>
+
+  // Region washes first, so they sit behind everything as real atmosphere
+  // per chapter instead of one flat, undifferentiated background for the
+  // whole scroll — each chapter now visibly reads as its own place.
+  const washesHTML = banners.map(b=>{
+    const color = theme.chapterColor(b.chapterNum);
+    return `<div class="map-region-wash" style="top:${b.y}px; height:${b.regionEnd-b.y}px; --band-color:${color}"></div>`;
+  }).join('');
+
+  // Dual-layer path: a wide, blurred, low-opacity glow underneath a thin
+  // crisp line on top — a lit trail rather than a wireframe sketch.
+  const pathD = buildMapPathD(nodes.map(n=>({x:n.x,y:n.y})));
+  const pathHTML = `<svg class="map-path-svg" viewBox="0 0 100 ${totalHeight}" preserveAspectRatio="none">
+    <path d="${pathD}" class="map-path-glow" fill="none" stroke-linecap="round"/>
+    <path d="${pathD}" class="map-path-line" fill="none" stroke-linecap="round"/>
   </svg>`;
+
+  track.innerHTML = washesHTML + pathHTML;
 
   banners.forEach(b=>{
     const el = document.createElement('div');
     el.className = 'map-chapter-banner';
     el.style.top = b.y + 'px';
     el.style.setProperty('--band-color', theme.chapterColor(b.chapterNum));
-    el.innerHTML = `<span class="band-icon">${SYMBOLS[(b.chapterNum-1)%SYMBOLS.length].emoji}</span><span class="band-text">Chapter ${b.chapterNum}</span>`;
+    el.innerHTML = `
+      <span class="band-medallion">${iconSVG((b.chapterNum-1)%SYMBOLS.length)}</span>
+      <span class="band-text">Chapter ${b.chapterNum}</span>
+      <span class="band-rule"></span>
+    `;
     track.appendChild(el);
   });
 
@@ -339,6 +362,16 @@ async function renderWorldMap(mode){
     const locked = idx >= unlocked || gateBlocked;
     const stars = state.getStars(mode.id, idx);
     const isCurrent = !locked && idx === unlocked-1;
+
+    // A soft blurred ellipse "grounding" the node beneath it — the
+    // cheapest possible depth cue (no 3D, no extra art) that still reads
+    // as "sitting on a surface" instead of a flat sticker floating on
+    // nothing.
+    const shadow = document.createElement('div');
+    shadow.className = 'map-node-shadow';
+    shadow.style.left = n.x + '%';
+    shadow.style.top = n.y + 'px';
+    track.appendChild(shadow);
 
     const btn = document.createElement('button');
     btn.className = 'map-node'

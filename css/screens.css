@@ -196,19 +196,47 @@
    long-form scrollable map rather than a paged grid. */
 .map-scroll{ width:100%; margin-top:18px; }
 .map-track{ position:relative; width:100%; }
-.map-path-svg{ position:absolute; inset:0; width:100%; height:100%; pointer-events:none; z-index:0; }
+
+/* Each chapter's own stretch of atmosphere — without this the whole trail
+   sits on one flat, undifferentiated color and reads as empty space with
+   dots in it rather than a place. Soft, wide, blurred — texture, not a
+   hard-edged banner. */
+.map-region-wash{
+  position:absolute; left:-20%; right:-20%; z-index:0; pointer-events:none;
+  background:
+    radial-gradient(ellipse 70% 55% at 30% 20%, color-mix(in srgb, var(--band-color) 16%, transparent) 0%, transparent 70%),
+    radial-gradient(ellipse 60% 45% at 75% 70%, color-mix(in srgb, var(--band-color) 12%, transparent) 0%, transparent 70%);
+}
+
+.map-path-svg{ position:absolute; inset:0; width:100%; height:100%; pointer-events:none; z-index:1; }
+.map-path-glow{ stroke:var(--gold-soft); stroke-width:7; opacity:.28; filter:blur(3px); }
+.map-path-line{ stroke:rgba(255,244,214,.75); stroke-width:1.6; stroke-dasharray:1.4 7; }
 
 .map-chapter-banner{
   position:absolute; left:0; right:0; height:92px;
   display:flex; flex-direction:column; align-items:center; justify-content:center;
-  background:linear-gradient(180deg, color-mix(in srgb, var(--band-color) 20%, transparent), transparent 90%);
-  border-top:1px solid color-mix(in srgb, var(--band-color) 45%, transparent);
-  z-index:1; pointer-events:none;
+  z-index:2; pointer-events:none;
 }
-.map-chapter-banner .band-icon{ font-size:26px; filter:drop-shadow(0 0 10px color-mix(in srgb, var(--band-color) 65%, transparent)); }
+.map-chapter-banner .band-medallion{
+  width:44px; height:44px; border-radius:50%;
+  display:flex; align-items:center; justify-content:center;
+  background:radial-gradient(circle at 32% 28%, color-mix(in srgb, var(--band-color) 60%, white 14%), color-mix(in srgb, var(--band-color) 85%, black 10%));
+  box-shadow:0 0 20px color-mix(in srgb, var(--band-color) 55%, transparent), inset 0 2px 3px rgba(255,255,255,.35);
+}
+.map-chapter-banner .band-medallion svg{ width:22px; height:22px; color:var(--cream); }
 .map-chapter-banner .band-text{
   font-family:var(--font-display); font-size:12px; letter-spacing:.14em; text-transform:uppercase;
-  color:var(--band-color); margin-top:4px;
+  color:var(--band-color); margin-top:6px;
+}
+.map-chapter-banner .band-rule{
+  display:block; width:64px; height:1px; margin-top:8px;
+  background:linear-gradient(90deg, transparent, color-mix(in srgb, var(--band-color) 70%, transparent), transparent);
+}
+
+.map-node-shadow{
+  position:absolute; transform:translate(-50%,-30%);
+  width:44px; height:16px; z-index:1; pointer-events:none;
+  background:radial-gradient(ellipse, rgba(0,0,0,.45) 0%, transparent 72%);
 }
 
 .map-node{
@@ -218,7 +246,7 @@
   background:radial-gradient(circle at 32% 28%, color-mix(in srgb, var(--chapter-accent) 55%, white 12%), var(--bg-2) 72%);
   border:2px solid color-mix(in srgb, var(--chapter-accent) 70%, var(--line));
   box-shadow:0 6px 16px rgba(0,0,0,.4), inset 0 2px 3px rgba(255,255,255,.18);
-  z-index:2; transition:transform .12s cubic-bezier(.3,1.4,.5,1);
+  z-index:3; transition:transform .12s cubic-bezier(.3,1.4,.5,1);
 }
 .map-node:active{ transform:translate(-50%,-50%) scale(.9); }
 .map-node .mn-icon{ font-family:var(--font-display); font-size:18px; color:var(--cream); }
