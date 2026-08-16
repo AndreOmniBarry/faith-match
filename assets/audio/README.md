@@ -6,24 +6,21 @@ present is skipped silently (no error, no console spam) — so you can add
 files one at a time and everything else stays exactly as quiet as it is
 today.
 
-Supported formats: `.mp3` or `.ogg` (the loader tries `.mp3` first, then
-falls back to `.ogg` with the same base name — use whichever you have).
+Supported formats, tried in this order per slot: `.mp3`, then `.ogg`, then
+`.wav` — so a real mp3/ogg you supply always wins automatically over a
+synthesized `.wav` placeholder occupying the same slot.
 
 ## `assets/audio/music/` — looping background tracks
 
 | File | Used for |
 |---|---|
 | `theme-main.mp3` | Splash / loading / mode-select / chapter / dashboard screens |
+| `theme-map.mp3` | The World Map screen specifically (falls back to theme-main if absent) |
 | `theme-gameplay.mp3` | Default in-level loop, used by any mode without its own override below |
 | `theme-grace-path.mp3` | *(optional)* overrides the gameplay loop for Grace Path only |
-| `theme-harvest.mp3` | *(optional)* overrides the gameplay loop for Harvest only |
-| `theme-refiners-fire.mp3` | *(optional)* overrides the gameplay loop for Refiner's Fire only |
-| `theme-daily-blessing.mp3` | *(optional)* overrides the gameplay loop for Daily Blessing only |
-
-With just your two current tracks: name one `theme-main.mp3` and the
-other `theme-gameplay.mp3` — that alone covers every screen and every
-mode with no per-mode overrides needed. Add the per-mode files later only
-if/when you want a given mode to sound different from the rest.
+| `theme-harvest.mp3` | overrides the gameplay loop for Harvest |
+| `theme-refiners-fire.mp3` | overrides the gameplay loop for Refiner's Fire |
+| `theme-daily-blessing.mp3` | overrides the gameplay loop for Daily Blessing |
 
 ## `assets/audio/sfx/` — one-shot effects
 
@@ -35,7 +32,9 @@ if/when you want a given mode to sound different from the rest.
 | `crack.mp3` | A veil layer breaks (Refiner's Fire) |
 | `win.mp3` | Level complete |
 | `lose.mp3` | Out of moves / level failed |
-| `surge.mp3` | Combo Surge meter fires |
+| `surge.mp3` | Combo Surge meter tapped (fires the burst) |
+| `meter-ready.mp3` | Combo Surge meter reaches full (distinct from tapping it) |
+| `reward.mp3` | Gems/an item actually land in the player's account (level reward, chapter bonus, daily reward) |
 | `finale.mp3` | Entering a chapter finale level |
 | `gate.mp3` | Hitting a star-gate |
 | `streak.mp3` | Daily Blessing streak milestone |

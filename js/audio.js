@@ -107,6 +107,13 @@ function playStreakSting(){ playSfx('streak', { volume: 0.7 }); }
 function playUiTap(){ playSfx('tap', { volume: 0.35 }); }
 function playScreenIn(){ playSfx('screen-in', { volume: 0.4 }); }
 function playScreenBack(){ playSfx('screen-back', { volume: 0.4 }); }
+// Meter reaching full is a distinct moment from actually tapping it to
+// fire (playSurgeSting) — the player should hear "that's ready" the
+// instant it caps, not just discover it visually.
+function playMeterReady(){ playSfx('meter-ready', { volume: 0.6 }); }
+// Any gems/items actually landing in the player's account — level
+// rewards, chapter bonus, daily reward — not just a generic win chime.
+function playRewardChime(){ playSfx('reward', { volume: 0.6 }); }
 
 function fadeTo(el, target, ms, onDone){
   const start = el.volume, t0 = performance.now();
@@ -177,6 +184,14 @@ function stopAmbientPad(){
   fadeTo(prev.el, 0, 500, () => { prev.el.pause(); prev.el.currentTime = 0; });
 }
 function playMenuTheme(){ switchMusic('theme-main', { volume: 0.3 }); }
+// The World Map gets its own dedicated track (theme-map) distinct from
+// the shared menu theme — falls back to the regular menu theme if that
+// file isn't present.
+function playMapTheme(){
+  getMusic('theme-map', (el) => {
+    switchMusic(el ? 'theme-map' : 'theme-main', { volume: 0.3 });
+  });
+}
 
 function vibrate(pattern){ try{ if(navigator.vibrate) navigator.vibrate(pattern); }catch(e){} }
 
@@ -185,7 +200,8 @@ export {
   playMatchSound, playSpecialSound, playSwapFail, playVeilCrack,
   playWinSound, playLoseSound,
   playSurgeSting, playFinaleSting, playGateSting, playStreakSting,
+  playMeterReady, playRewardChime,
   playUiTap, playScreenIn, playScreenBack,
-  startAmbientPad, stopAmbientPad, playMenuTheme,
+  startAmbientPad, stopAmbientPad, playMenuTheme, playMapTheme,
   vibrate,
 };

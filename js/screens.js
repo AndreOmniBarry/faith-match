@@ -32,12 +32,13 @@ function showScreen(name){
   Object.values(screens).forEach(s=>s.classList.add('hidden'));
   screens[name].classList.remove('hidden');
   audio.playScreenIn();
-  // Every non-game screen shares the menu theme; runLevel() takes over
-  // with the per-mode gameplay loop once a level actually starts, and
-  // this naturally resumes the menu theme on any way back out (path,
-  // chapters, dashboard, splash) without each nav handler needing to
-  // know about audio.
-  if(name !== 'game') audio.playMenuTheme();
+  // Every non-game, non-map screen shares the menu theme; the World Map
+  // gets its own dedicated track; runLevel() takes over with the
+  // per-mode gameplay loop once a level actually starts. This naturally
+  // resumes the right theme on any way back out without each nav handler
+  // needing to know about audio.
+  if(name === 'map') audio.playMapTheme();
+  else if(name !== 'game') audio.playMenuTheme();
   if(name === 'dashboard') startDashboardClock(); else stopDashboardClock();
 }
 function showToast(msg, ms){
@@ -76,6 +77,7 @@ const LOADING_TIPS = [
 
 let nav = { mode:null };
 let currentLevel = null;
+let meterWasReady = false;
 let levelStartedAt = 0;
 let idleTimer = null;
 let lastInteraction = 0;
@@ -482,6 +484,11 @@ function updateHUD(s){
   const pct = Math.round((s.comboMeter/s.comboMeterCap)*100);
   meterFill.style.width = pct+'%';
   const ready = s.comboMeter >= s.comboMeterCap;
+  // Edge-triggered, not level-triggered — the meter reaching full is one
+  // moment the player should hear, not a sound that repeats on every HUD
+  // tick while it happens to already be full.
+  if(ready && !meterWasReady) audio.playMeterReady();
+  meterWasReady = ready;
   meterWrap.classList.toggle('ready', ready);
   meterLabel.textContent = ready ? 'Tap for a surge!' : 'Combo Surge';
 
@@ -793,6 +800,7 @@ async function runLevel(level){
   if(!lives.getLives()){ showOutOfLives(); return; }
 
   currentLevel = level;
+  meterWasReady = false;
   showScreen('game');
   renderGameChrome(level);
   // The world map shows every chapter's own accent color inline per-node;
@@ -853,15 +861,17 @@ function onLevelWin(s){
     const result = rewards.advanceDailySession(s.score);
     if(result.reward){
       rewardLines.push(`💎${result.reward.gems} + ${rewards.ITEMS[result.reward.item].emoji} ${rewards.ITEMS[result.reward.item].name}`);
+      audio.playRewardChime();
       audio.playStreakSting(result.streak);
     }
   }else if(currentLevel.index!=null){
     state.recordCompletion(currentLevel.mode, currentLevel.index, stars);
     const gems = rewards.rewardForLevel(stars);
-    if(gems){ rewards.addGems(gems); rewardLines.push(`💎${gems}`); }
+    if(gems){ rewards.addGems(gems); rewardLines.push(`💎${gems}`); audio.playRewardChime(); }
     if(isChapterComplete(currentLevel, stars)){
       const chReward = rewards.rewardForChapter();
       rewardLines.push(`Chapter bonus: 💎${chReward.gems} + ${rewards.ITEMS[chReward.item].emoji} ${rewards.ITEMS[chReward.item].name}`);
+      audio.playRewardChime();
     }
   }
   updateStatusBar();
