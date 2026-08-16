@@ -108,7 +108,6 @@
     <div class="board-arch" id="board-arch">
       <div class="board" id="board"></div>
       <canvas class="fx-canvas" id="fx-canvas"></canvas>
-      <div class="flash-layer" id="flash-layer"></div>
       <div class="combo-popup" id="combo-popup"></div>
       <div class="timer-badge hidden" id="timer-badge">5:00</div>
     </div>
@@ -137,6 +136,12 @@
 <div class="toast hidden" id="toast"></div>
 <div class="confetti-layer" id="confetti-layer"></div>
 
+<!-- Vendored locally (fetched via npm registry, not a live CDN reference) so
+     the app stays self-contained and works offline on-device. Classic
+     scripts execute before the deferred module graph below, so PIXI is
+     guaranteed to be on window by the time js/render.js runs. -->
+<script src="js/vendor/pixi.min.js"></script>
+<script src="js/vendor/pixi-filters.js"></script>
 <script type="module" src="js/main.js"></script>
 </body>
 </html>
