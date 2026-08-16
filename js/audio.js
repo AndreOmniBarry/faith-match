@@ -8,7 +8,7 @@
 
 const MUSIC_DIR = 'assets/audio/music/';
 const SFX_DIR = 'assets/audio/sfx/';
-const EXTS = ['mp3', 'ogg'];
+const EXTS = ['mp3', 'ogg', 'wav']; // wav last so a supplied mp3/ogg always wins over a synthesized fallback
 
 let soundOn = true;
 let unlocked = false; // browsers block audio until a user gesture
@@ -46,21 +46,40 @@ function getSfx(key, cb){
   probe(SFX_DIR + key, (el) => { sfxCache.set(key, el); cb(el); });
 }
 
+// Warm the menu theme into the cache as soon as this module loads — a
+// silent network preload, no playback. By the time the player actually
+// taps "Begin" (at least a second or two later), the element is already
+// resolved, so getMusic()'s cache-hit branch below returns *synchronously*
+// and ensureAudio() can call .play() within that same click's call stack.
+// That's the fix for "had to toggle sound off/on before it started
+// playing": the old code unlocked with a src-less dummy element, which
+// doesn't reliably register as a real gesture-triggered play in every
+// browser, and the *real* first play (from switchMusic's async probe
+// callback) landed too late to still count as gesture-initiated. Toggling
+// sound worked because it calls .play() directly on an already-loaded
+// cached element — this makes the very first tap behave the same way.
+getMusic('theme-main', () => {});
+
 function setSoundEnabled(v){
   soundOn = v;
   if(!v && currentMusic) currentMusic.el.pause();
-  else if(v && currentMusic) currentMusic.el.play().catch(()=>{});
+  else if(v && currentMusic){
+    const rec = currentMusic;
+    rec.el.play().then(() => { rec.confirmed = true; }).catch(()=>{});
+  }
 }
 function isSoundEnabled(){ return soundOn; }
 
 function ensureAudio(){
   // Call from a real user-gesture handler (first tap) — some browsers
   // (iOS Safari in particular) refuse to play any audio, even muted,
-  // until playback has been kicked off inside a click/tap event.
+  // until playback has been kicked off inside a click/tap event. Starting
+  // the actual menu theme here (rather than a throwaway silent element)
+  // both unlocks audio and gets the music going immediately, with no
+  // second interaction needed.
   if(unlocked) return;
   unlocked = true;
-  const silence = new Audio();
-  silence.play().catch(()=>{});
+  playMenuTheme();
 }
 
 function playSfx(key, { volume = 0.55 } = {}){
@@ -106,7 +125,20 @@ function fadeTo(el, target, ms, onDone){
 }
 
 function switchMusic(key, { volume = 0.35, fadeMs = 600 } = {}){
-  if(currentMusic && currentMusic.key === key) return;
+  // Only skip re-triggering if that track is both current *and* actually
+  // confirmed playing — see the .confirmed handling below for why that
+  // distinction is the whole fix for a real bug: the very first play()
+  // attempt right after the page's first tap can get blocked by the
+  // browser's autoplay gate even though the tap was genuine (a Chromium
+  // activation-propagation timing quirk, not a code mistake). The old
+  // code marked currentMusic as that key regardless of whether play()
+  // actually succeeded, so every later legitimate call (a screen change,
+  // starting a level) saw "already on this track" and silently no-op'd
+  // forever — the track never played until something bypassed this check
+  // entirely, like the sound toggle calling .play() directly. Rolling
+  // currentMusic back to null on a failed attempt lets the next real call
+  // retry cleanly instead of getting stuck.
+  if(currentMusic && currentMusic.key === key && currentMusic.confirmed) return;
   const prev = currentMusic;
   currentMusic = null;
   if(prev){
@@ -117,8 +149,11 @@ function switchMusic(key, { volume = 0.35, fadeMs = 600 } = {}){
     if(!el) return;
     el.loop = true;
     el.volume = 0;
-    currentMusic = { key, el };
-    el.play().catch(()=>{});
+    const rec = { key, el, confirmed: false };
+    currentMusic = rec;
+    el.play().then(() => { rec.confirmed = true; }).catch(() => {
+      if(currentMusic === rec) currentMusic = null;
+    });
     fadeTo(el, volume, fadeMs);
   });
 }
