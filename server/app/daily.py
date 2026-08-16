@@ -1,8 +1,8 @@
-"""Daily Blessing — a 3-level session, date-seeded, shared by every player on
-a given UTC day. Deterministic from the calendar date alone, so every client
-asking "what's today's session" gets byte-identical levels with no need to
-coordinate or store anything server-side. Not endlessly replayable by design
-— that's what makes it a "daily," not just another mode (streak/session
+"""Daily Blessing — one challenge, date-seeded, shared by every player on a
+given UTC day. Deterministic from the calendar date alone, so every client
+asking "what's today's challenge" gets a byte-identical level with no need
+to coordinate or store anything server-side. Not endlessly replayable by
+design — that's what makes it a "daily," not just another mode (streak
 bookkeeping itself lives client-side in js/rewards.js, same as other local
 progress)."""
 
@@ -15,7 +15,7 @@ from .level_gen import get_level
 
 DAILY_MODE = "daily-blessing"
 INDEX_SPAN = 20_000  # keeps the daily rotation from ever repeating within a human lifetime
-SESSION_LENGTH = 3
+SESSION_LENGTH = 1  # one challenge per day, not a multi-level session
 
 
 def _today_utc() -> date:

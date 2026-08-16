@@ -388,7 +388,7 @@ function objectiveAreaHTML(level){
 function renderGameChrome(level){
   const mode = modeById(level.mode) || { name:'Faith Match' };
   $('game-level-name').textContent = level.mode==='daily-blessing'
-    ? `Daily Blessing · ${(level.dailySlot??0)+1}/3` : `LEVEL ${level.index+1} · ${level.name}`;
+    ? "Today's Blessing" : `LEVEL ${level.index+1} · ${level.name}`;
   $('game-mode-name').textContent = level.finale ? `${mode.name} · Stage Finale` : mode.name;
   $('objective-area').innerHTML = objectiveAreaHTML(level);
   if(level.objective==='collect'){
@@ -507,6 +507,9 @@ function setSelection(cell){
 
 function registerInteraction(){ lastInteraction = Date.now(); clearHint(); }
 
+const clamp = (v,lo,hi)=>Math.max(lo,Math.min(hi,v));
+const SWAP_COMMIT_RATIO = 0.42; // fraction of a tile-width a drag must cross to commit the swap
+
 function onBoardPointerDown(e){
   if(engine.isBusy()) return;
   audio.ensureAudio();
@@ -521,27 +524,55 @@ function onBoardPointerDown(e){
     return;
   }
 
-  pointerStart = { x:e.clientX, y:e.clientY, cell };
+  const el = engine.getTileElAt(cell.r, cell.c);
+  pointerStart = { x:e.clientX, y:e.clientY, cell, el };
+  if(el) render.beginTileDrag(el);
+  window.addEventListener('pointermove', onBoardPointerMove);
   window.addEventListener('pointerup', onBoardPointerUp, { once:true });
 }
+// The pressed tile follows the finger/cursor live — like actually picking
+// the piece up, not just registering a swipe direction after the fact.
+// Locked mostly to whichever axis you're dragging along (a small bleed on
+// the cross-axis keeps it feeling like a real object rather than a rail),
+// clamped to one tile-width so it can't be dragged arbitrarily far off its
+// own cell.
+function onBoardPointerMove(e){
+  if(!pointerStart || !pointerStart.el) return;
+  const dx = e.clientX - pointerStart.x, dy = e.clientY - pointerStart.y;
+  const ts = render.getTileSize();
+  let ox, oy;
+  if(Math.abs(dx) >= Math.abs(dy)){
+    ox = clamp(dx, -ts, ts);
+    oy = clamp(dy*0.15, -ts*0.15, ts*0.15);
+  }else{
+    oy = clamp(dy, -ts, ts);
+    ox = clamp(dx*0.15, -ts*0.15, ts*0.15);
+  }
+  render.updateTileDrag(pointerStart.el, ox, oy);
+}
 function onBoardPointerUp(e){
+  window.removeEventListener('pointermove', onBoardPointerMove);
   if(!pointerStart) return;
   const dx = e.clientX - pointerStart.x, dy = e.clientY - pointerStart.y;
   const dist = Math.hypot(dx,dy);
   const startCell = pointerStart.cell;
+  const draggedEl = pointerStart.el;
   const ts = render.getTileSize();
   pointerStart = null;
 
-  if(dist > ts*0.28){
+  if(dist > ts*SWAP_COMMIT_RATIO){
     let target;
     if(Math.abs(dx) > Math.abs(dy)) target = { r:startCell.r, c:startCell.c + (dx>0?1:-1) };
     else target = { r:startCell.r + (dy>0?1:-1), c:startCell.c };
     if(target.r>=0 && target.r<currentLevel.rows && target.c>=0 && target.c<currentLevel.cols){
       clearSelection();
-      engine.attemptSwap(startCell, target);
+      engine.attemptSwap(startCell, target); // its own setTileTransform takes over seamlessly from the dragged position
       return;
     }
   }
+  // Not a committed swap — spring the picked-up tile back to its cell.
+  if(draggedEl) render.endTileDragSnapBack(draggedEl);
+
   if(!selectedCell){ setSelection(startCell); return; }
   if(selectedCell.r===startCell.r && selectedCell.c===startCell.c){ clearSelection(); return; }
   if(engine.isAdjacent(selectedCell, startCell)){

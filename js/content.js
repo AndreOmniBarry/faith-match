@@ -237,7 +237,9 @@ async function getChapter(mode, chapterNum){
   return { levels: levels.map(lvl => curatedOverride(mode, lvl.index) || lvl), gate };
 }
 
-const DAILY_SESSION_LENGTH = 3;
+// Daily Blessing is one challenge, once a day — carpe diem, not a session
+// to grind through. (Was a 3-level session; reverted per direction.)
+const DAILY_SESSION_LENGTH = 1;
 function todaySeedIndex(){
   const d = new Date();
   const iso = d.toISOString().slice(0,10);
