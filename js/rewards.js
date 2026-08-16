@@ -74,13 +74,15 @@ function getDailyStatus(){
 function isDailySessionDone(){ return getDailyStatus().session.completed; }
 function getDailySessionLevelIndex(){ return getDailyStatus().session.levelIndex; }
 
+const DAILY_SESSION_LENGTH = 1; // one challenge per day — see js/content.js
+
 function advanceDailySession(scoreGained){
   const status = getDailyStatus();
   const s = state.daily.session;
   s.levelIndex++;
   s.scoreTotal += scoreGained;
   let reward = null;
-  if(s.levelIndex >= 3){
+  if(s.levelIndex >= DAILY_SESSION_LENGTH){
     s.completed = true;
     if(state.daily.lastCompletedDate === yesterdayISO(s.date)) state.daily.streak++;
     else if(state.daily.lastCompletedDate !== s.date) state.daily.streak = 1;

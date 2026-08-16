@@ -14,6 +14,7 @@ import * as lives from './lives.js';
 import * as rewards from './rewards.js';
 import * as theme from './theme.js';
 import { SYMBOLS, MODES, modeById, CHAPTER_SIZE, getLevel, getChapter, getDaily } from './content.js';
+import { iconSVG } from './icons.js';
 
 const $ = (id)=>document.getElementById(id);
 const rand = (n)=>Math.floor(Math.random()*n);
@@ -37,6 +38,7 @@ function showScreen(name){
   // chapters, dashboard, splash) without each nav handler needing to
   // know about audio.
   if(name !== 'game') audio.playMenuTheme();
+  if(name === 'dashboard') startDashboardClock(); else stopDashboardClock();
 }
 function showToast(msg, ms){
   const t = $('toast');
@@ -85,8 +87,17 @@ const IDLE_MS = 6000;
 
 /* ============================= SPLASH / LOADING ============================= */
 
+function renderSplashMotif(){
+  const row = $('splash-motif');
+  if(!row) return;
+  row.innerHTML = SYMBOLS.map((s,i)=>
+    `<span class="sm-swatch" style="--sm-color:${s.color}; animation-delay:${(i*0.18).toFixed(2)}s">${iconSVG(i)}</span>`
+  ).join('');
+}
+
 function initSplash(){
   refreshSoundButtons();
+  renderSplashMotif();
   $('btn-play').addEventListener('click', ()=>{ audio.ensureAudio(); goLoading(); });
   $('btn-sound-splash').addEventListener('click', toggleSound);
 }
@@ -126,15 +137,15 @@ function updateStatusBar(){
 
 function renderDashboard(){
   updateStatusBar();
-  const ms = lives.msUntilNextLife();
   const grid = $('dash-grid');
   grid.innerHTML = `
-    <div class="dash-tile"><div class="dv">❤️ ${lives.getLives()}/${lives.getCap()}</div><div class="dl">Lives</div>
-      <div class="dsub">${ms>0 ? 'Next in '+lives.formatCountdown(ms) : 'Full'}</div></div>
+    <div class="dash-tile"><div class="dv" id="dash-lives-val"></div><div class="dl">Lives</div>
+      <div class="dsub" id="dash-lives-sub"></div></div>
     <div class="dash-tile"><div class="dv">💎 ${rewards.getGems()}</div><div class="dl">Gems</div></div>
     <div class="dash-tile"><div class="dv">🔥 ${rewards.getDailyStatus().streak}</div><div class="dl">Daily Streak</div></div>
     <div class="dash-tile"><div class="dv">${rewards.isDailySessionDone() ? 'Done' : 'Open'}</div><div class="dl">Today's Blessing</div></div>
   `;
+  tickDashboardLives();
   const inv = $('dash-inventory');
   const items = rewards.getInventory();
   const owned = Object.entries(items).filter(([,n])=>n>0);
@@ -148,6 +159,25 @@ function renderDashboard(){
     `<div class="dash-item">${m.icon} ${m.name} <strong>★${state.getTotalStars(m.id)}</strong></div>`
   ).join('');
 }
+
+// The "Next life in ⏱" line was only ever computed at render time — it sat
+// frozen until the player left and came back, reading as "not real time".
+// This ticks the two lives-related fields once a second while the
+// Dashboard is actually the visible screen (started/stopped from
+// showScreen(), same pattern as the audio menu-theme hookup).
+function tickDashboardLives(){
+  const val = $('dash-lives-val'), sub = $('dash-lives-sub');
+  if(!val || !sub) return;
+  const ms = lives.msUntilNextLife();
+  val.textContent = `❤️ ${lives.getLives()}/${lives.getCap()}`;
+  sub.textContent = ms>0 ? 'Next in '+lives.formatCountdown(ms) : 'Full';
+}
+let dashClockInterval = null;
+function startDashboardClock(){
+  stopDashboardClock();
+  dashClockInterval = setInterval(tickDashboardLives, 1000);
+}
+function stopDashboardClock(){ if(dashClockInterval){ clearInterval(dashClockInterval); dashClockInterval=null; } }
 
 /* ============================= MODE SELECT ============================= */
 
@@ -236,7 +266,7 @@ function buildMapLayout(chaptersData){
   let globalIdx = 0;
   const nodes = [], banners = [];
   chaptersData.forEach(({ chapterNum, levels, gate })=>{
-    banners.push({ chapterNum, y });
+    const bannerY = y;
     y += MAP_BANNER_H;
     levels.forEach((level, slotIdx)=>{
       const x = 50 + MAP_WAVE_AMP*Math.sin(globalIdx*MAP_WAVE_STEP);
@@ -245,6 +275,10 @@ function buildMapLayout(chaptersData){
       globalIdx++;
     });
     y += MAP_CHAPTER_PAD;
+    // regionEnd marks where this chapter's own background wash stops —
+    // lets each stretch of the map read as its own place rather than every
+    // chapter sitting on one flat, undifferentiated background.
+    banners.push({ chapterNum, y: bannerY, regionEnd: y });
   });
   return { nodes, banners, totalHeight: y + 40 };
 }
@@ -287,16 +321,35 @@ async function renderWorldMap(mode){
 
   const { nodes, banners, totalHeight } = buildMapLayout(chaptersData);
   track.style.height = totalHeight + 'px';
-  track.innerHTML = `<svg class="map-path-svg" viewBox="0 0 100 ${totalHeight}" preserveAspectRatio="none">
-    <path d="${buildMapPathD(nodes.map(n=>({x:n.x,y:n.y})))}" fill="none" stroke="rgba(230,183,84,.32)" stroke-width="2.4" stroke-dasharray="1.4 8" stroke-linecap="round"/>
+
+  // Region washes first, so they sit behind everything as real atmosphere
+  // per chapter instead of one flat, undifferentiated background for the
+  // whole scroll — each chapter now visibly reads as its own place.
+  const washesHTML = banners.map(b=>{
+    const color = theme.chapterColor(b.chapterNum);
+    return `<div class="map-region-wash" style="top:${b.y}px; height:${b.regionEnd-b.y}px; --band-color:${color}"></div>`;
+  }).join('');
+
+  // Dual-layer path: a wide, blurred, low-opacity glow underneath a thin
+  // crisp line on top — a lit trail rather than a wireframe sketch.
+  const pathD = buildMapPathD(nodes.map(n=>({x:n.x,y:n.y})));
+  const pathHTML = `<svg class="map-path-svg" viewBox="0 0 100 ${totalHeight}" preserveAspectRatio="none">
+    <path d="${pathD}" class="map-path-glow" fill="none" stroke-linecap="round"/>
+    <path d="${pathD}" class="map-path-line" fill="none" stroke-linecap="round"/>
   </svg>`;
+
+  track.innerHTML = washesHTML + pathHTML;
 
   banners.forEach(b=>{
     const el = document.createElement('div');
     el.className = 'map-chapter-banner';
     el.style.top = b.y + 'px';
     el.style.setProperty('--band-color', theme.chapterColor(b.chapterNum));
-    el.innerHTML = `<span class="band-icon">${SYMBOLS[(b.chapterNum-1)%SYMBOLS.length].emoji}</span><span class="band-text">Chapter ${b.chapterNum}</span>`;
+    el.innerHTML = `
+      <span class="band-medallion">${iconSVG((b.chapterNum-1)%SYMBOLS.length)}</span>
+      <span class="band-text">Chapter ${b.chapterNum}</span>
+      <span class="band-rule"></span>
+    `;
     track.appendChild(el);
   });
 
@@ -309,6 +362,16 @@ async function renderWorldMap(mode){
     const locked = idx >= unlocked || gateBlocked;
     const stars = state.getStars(mode.id, idx);
     const isCurrent = !locked && idx === unlocked-1;
+
+    // A soft blurred ellipse "grounding" the node beneath it — the
+    // cheapest possible depth cue (no 3D, no extra art) that still reads
+    // as "sitting on a surface" instead of a flat sticker floating on
+    // nothing.
+    const shadow = document.createElement('div');
+    shadow.className = 'map-node-shadow';
+    shadow.style.left = n.x + '%';
+    shadow.style.top = n.y + 'px';
+    track.appendChild(shadow);
 
     const btn = document.createElement('button');
     btn.className = 'map-node'
@@ -367,7 +430,7 @@ function objectiveAreaHTML(level){
 function renderGameChrome(level){
   const mode = modeById(level.mode) || { name:'Faith Match' };
   $('game-level-name').textContent = level.mode==='daily-blessing'
-    ? `Daily Blessing · ${(level.dailySlot??0)+1}/3` : `LEVEL ${level.index+1} · ${level.name}`;
+    ? "Today's Blessing" : `LEVEL ${level.index+1} · ${level.name}`;
   $('game-mode-name').textContent = level.finale ? `${mode.name} · Stage Finale` : mode.name;
   $('objective-area').innerHTML = objectiveAreaHTML(level);
   if(level.objective==='collect'){
@@ -376,7 +439,8 @@ function renderGameChrome(level){
       const chip = document.createElement('div');
       chip.className = 'collect-chip';
       chip.id = 'collect-chip-'+req.type;
-      chip.innerHTML = `<span class="cc-emoji">${SYMBOLS[req.type].emoji}</span><span>0/${req.count}</span>`;
+      chip.style.setProperty('--cc-color', SYMBOLS[req.type].color);
+      chip.innerHTML = `<span class="cc-swatch">${iconSVG(req.type)}</span><span>0/${req.count}</span>`;
       row.appendChild(chip);
     });
   }
@@ -485,6 +549,9 @@ function setSelection(cell){
 
 function registerInteraction(){ lastInteraction = Date.now(); clearHint(); }
 
+const clamp = (v,lo,hi)=>Math.max(lo,Math.min(hi,v));
+const SWAP_COMMIT_RATIO = 0.42; // fraction of a tile-width a drag must cross to commit the swap
+
 function onBoardPointerDown(e){
   if(engine.isBusy()) return;
   audio.ensureAudio();
@@ -499,27 +566,55 @@ function onBoardPointerDown(e){
     return;
   }
 
-  pointerStart = { x:e.clientX, y:e.clientY, cell };
+  const el = engine.getTileElAt(cell.r, cell.c);
+  pointerStart = { x:e.clientX, y:e.clientY, cell, el };
+  if(el) render.beginTileDrag(el);
+  window.addEventListener('pointermove', onBoardPointerMove);
   window.addEventListener('pointerup', onBoardPointerUp, { once:true });
 }
+// The pressed tile follows the finger/cursor live — like actually picking
+// the piece up, not just registering a swipe direction after the fact.
+// Locked mostly to whichever axis you're dragging along (a small bleed on
+// the cross-axis keeps it feeling like a real object rather than a rail),
+// clamped to one tile-width so it can't be dragged arbitrarily far off its
+// own cell.
+function onBoardPointerMove(e){
+  if(!pointerStart || !pointerStart.el) return;
+  const dx = e.clientX - pointerStart.x, dy = e.clientY - pointerStart.y;
+  const ts = render.getTileSize();
+  let ox, oy;
+  if(Math.abs(dx) >= Math.abs(dy)){
+    ox = clamp(dx, -ts, ts);
+    oy = clamp(dy*0.15, -ts*0.15, ts*0.15);
+  }else{
+    oy = clamp(dy, -ts, ts);
+    ox = clamp(dx*0.15, -ts*0.15, ts*0.15);
+  }
+  render.updateTileDrag(pointerStart.el, ox, oy);
+}
 function onBoardPointerUp(e){
+  window.removeEventListener('pointermove', onBoardPointerMove);
   if(!pointerStart) return;
   const dx = e.clientX - pointerStart.x, dy = e.clientY - pointerStart.y;
   const dist = Math.hypot(dx,dy);
   const startCell = pointerStart.cell;
+  const draggedEl = pointerStart.el;
   const ts = render.getTileSize();
   pointerStart = null;
 
-  if(dist > ts*0.28){
+  if(dist > ts*SWAP_COMMIT_RATIO){
     let target;
     if(Math.abs(dx) > Math.abs(dy)) target = { r:startCell.r, c:startCell.c + (dx>0?1:-1) };
     else target = { r:startCell.r + (dy>0?1:-1), c:startCell.c };
     if(target.r>=0 && target.r<currentLevel.rows && target.c>=0 && target.c<currentLevel.cols){
       clearSelection();
-      engine.attemptSwap(startCell, target);
+      engine.attemptSwap(startCell, target); // its own setTileTransform takes over seamlessly from the dragged position
       return;
     }
   }
+  // Not a committed swap — spring the picked-up tile back to its cell.
+  if(draggedEl) render.endTileDragSnapBack(draggedEl);
+
   if(!selectedCell){ setSelection(startCell); return; }
   if(selectedCell.r===startCell.r && selectedCell.c===startCell.c){ clearSelection(); return; }
   if(engine.isAdjacent(selectedCell, startCell)){

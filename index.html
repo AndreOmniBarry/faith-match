@@ -22,7 +22,14 @@
   <!-- SPLASH -->
   <section class="screen" id="screen-splash">
     <div class="glow-rays"></div>
-    <div class="brand-icon">✝️</div>
+    <div class="splash-sparkles" aria-hidden="true">
+      <span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span>
+    </div>
+    <div class="brand-emblem">
+      <div class="emblem-ring emblem-ring-outer"></div>
+      <div class="emblem-ring emblem-ring-inner"></div>
+      <div class="brand-icon">✝️</div>
+    </div>
     <h1 class="brand-title">Faith Match</h1>
     <div class="brand-sub">A Blessed Puzzle Journey</div>
     <p class="title-verse">Swap symbols, match three or more, and chase the light — every combo tells its own little hallelujah.</p>
@@ -30,7 +37,10 @@
       <button class="btn-primary" id="btn-play">Begin</button>
       <button class="btn-ghost" id="btn-sound-splash">🔊 Sound On</button>
     </div>
-    <div class="title-foot">Faith Match · Prototype build</div>
+    <!-- Populated from js/icons.js (initSplash) so it uses the exact same
+         icon glyphs + colors as the board — not platform emoji, which would
+         reintroduce the color-mismatch bug fixed on the collect chips. -->
+    <div class="splash-motif" id="splash-motif" aria-hidden="true"></div>
   </section>
 
   <!-- LOADING -->

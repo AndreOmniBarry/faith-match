@@ -18,6 +18,7 @@ let boardLayer = null;
 let tileSize = 40;
 let cols = 8, rows = 8;
 const baseTextures = new Map(); // type index -> PIXI.Texture (shared, reused per tile)
+const reduceMotion = typeof window!=='undefined' && window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 let readyPromise = null;
 
 /* ============================= INIT ============================= */
@@ -187,6 +188,39 @@ function ensureTicker(){
   });
 }
 
+/* ============================= AMBIENT "BREATHING" ============================= */
+// Every tile at rest gets a faint, alive-feeling pulse — a soft double-beat
+// rhythm (a quick "lub", a smaller "dub", then a rest) rather than a plain
+// sine wobble, so it reads as organic rather than mechanical, and delicate
+// enough that it's a texture, not a distraction. Deliberately applied to
+// the *sprite's* own scale, not the container's — the container's scale is
+// what pop/spawn/land/swap-stretch animate, so keeping this on a separate
+// transform channel means the ambient pulse and any one-shot effect never
+// fight over the same number. Skipped entirely for prefers-reduced-motion,
+// and paused per-tile while it's actively being dragged.
+const liveHandles = new Set();
+const BREATHE_PERIOD = 1.8; // seconds
+const BREATHE_AMOUNT = 0.035; // max scale bump — subtle on purpose
+function heartbeatCurve(u){
+  const lub = Math.max(0, 1 - Math.abs((u-0.08)/0.07));
+  const dub = Math.max(0, 1 - Math.abs((u-0.24)/0.09)) * 0.6;
+  return Math.max(lub, dub);
+}
+let breatheTickerOn = false;
+function ensureBreatheTicker(){
+  if(breatheTickerOn || !app || reduceMotion) return;
+  breatheTickerOn = true;
+  app.ticker.add(()=>{
+    const t = performance.now()/1000;
+    liveHandles.forEach(h=>{
+      if(h._dragBaseX!=null) return; // lifted for a drag — let the drag read clearly instead
+      const u = (((t*(1/BREATHE_PERIOD)) + h._breathePhase) % 1);
+      const s = (h._baseScale||1) * (1 + heartbeatCurve(u)*BREATHE_AMOUNT);
+      h.sprite.scale.set(s);
+    });
+  });
+}
+
 /* ============================= TILE HANDLE ============================= */
 // The object stored as `tile.el`. engine.js only ever calls
 // `.classList.add/remove(name)` on it directly (for 'pop'/'spawn-special'/
@@ -212,6 +246,8 @@ class TileHandle{
     this.container.addChild(this.sprite);
     this.container.addChild(this.glow);
     this._pulseT = 0;
+    this._breathePhase = Math.random(); // own offset so tiles don't beat in unison
+    this._baseScale = 1;
     this.classList = {
       add: (name)=>{
         if(name==='pop') this.playPop();
@@ -223,6 +259,10 @@ class TileHandle{
   }
   setSize(size){
     this.sprite.width = size; this.sprite.height = size;
+    // The breathing ticker multiplies on top of whatever scale actually
+    // fits the icon to the current tile size — capture it here rather than
+    // hardcoding, so it stays correct across resizes.
+    this._baseScale = this.sprite.scale.x;
   }
   updateVisual(){
     const tile = this.tile;
@@ -307,6 +347,13 @@ function setTileTransform(handle, r, c){
   if(!handle) return;
   const target = { x: c*tileSize + tileSize/2, y: r*tileSize + tileSize/2 };
   cancelTweensOf(handle.container, ['x','y']);
+  // This is the function that sends a tile to its one authoritative grid
+  // position, whether that's a normal cascade/refill move or a swap
+  // committing straight out of a drag — so it's also the right place to
+  // drop the "currently being dragged" lift (z-order + base-offset
+  // bookkeeping) regardless of which path got it here.
+  handle._dragBaseX = handle._dragBaseY = null;
+  handle.container.zIndex = 0;
   tween(handle.container, target, 280, easeOutBack);
 }
 function placeTileInstant(handle, r, c){
@@ -333,6 +380,8 @@ function createTileEl(tile, onPointerDown){
     onPointerDown({ clientX: rect.left + e.global.x, clientY: rect.top + e.global.y });
   });
   boardLayer.addChild(handle.container);
+  liveHandles.add(handle);
+  ensureBreatheTicker();
   return handle;
 }
 function refreshTileVisual(tile){
@@ -341,6 +390,7 @@ function refreshTileVisual(tile){
 function removeTileEl(tile){
   if(!tile.el) return;
   const h = tile.el;
+  liveHandles.delete(h);
   if(h._pulseTicking && app) app.ticker.remove(h._pulseFn);
   cancelTweensOf(h.container);
   cancelTweensOf(h.container.scale);
@@ -349,6 +399,33 @@ function removeTileEl(tile){
 }
 function playLandAnimation(tile){ if(tile.el) tile.el.playLand(); }
 function playSwapStretch(tile){ if(tile.el) tile.el.playSwapStretch(); }
+
+/* ---------- free drag-follow ---------- */
+// The tile the player is pressing tracks their finger/cursor live instead
+// of only reacting once the gesture ends — press, drag, see it lean toward
+// the neighbor you're aiming at, release to either commit (attemptSwap's
+// own setTileTransform call takes over seamlessly from wherever the drag
+// left it) or spring back if it didn't go far enough / wasn't a legal move.
+function beginTileDrag(handle){
+  if(!handle) return;
+  cancelTweensOf(handle.container, ['x','y']);
+  handle._dragBaseX = handle.container.x;
+  handle._dragBaseY = handle.container.y;
+  handle.container.zIndex = 10; // stay above neighbors while lifted
+  if(handle.container.parent) handle.container.parent.sortableChildren = true;
+}
+function updateTileDrag(handle, offsetX, offsetY){
+  if(!handle || handle._dragBaseX==null) return;
+  handle.container.x = handle._dragBaseX + offsetX;
+  handle.container.y = handle._dragBaseY + offsetY;
+}
+function endTileDragSnapBack(handle){
+  if(!handle || handle._dragBaseX==null) return;
+  const target = { x: handle._dragBaseX, y: handle._dragBaseY };
+  handle._dragBaseX = handle._dragBaseY = null;
+  handle.container.zIndex = 0;
+  tween(handle.container, target, 260, easeOutBack);
+}
 
 function renderFullBoard(rowsArg, colsArg, grid, tilesById, onPointerDown){
   rows = rowsArg; cols = colsArg;
@@ -379,5 +456,6 @@ export {
   setBoardEl, getBoardEl, getApp, getReady, measureTileSize, getTileSize, cellCenter, setTileTransform,
   placeTileInstant, resizeTile, createTileEl, refreshTileVisual, renderFullBoard, removeTileEl,
   playLandAnimation, playSwapStretch,
+  beginTileDrag, updateTileDrag, endTileDragSnapBack,
   tween, cancelTweensOf, easeOutBack, easeOutCubic, hexOf,
 };
