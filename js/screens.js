@@ -14,7 +14,7 @@ import * as lives from './lives.js';
 import * as rewards from './rewards.js';
 import * as theme from './theme.js';
 import * as splashFx from './splash-fx.js';
-import { SYMBOLS, MODES, modeById, CHAPTER_SIZE, getLevel, getChapter, getDaily } from './content.js';
+import { SYMBOLS, MODES, modeById, CHAPTER_SIZE, CONTENT_CEILING_LEVELS, getLevel, getChapter, getDaily } from './content.js';
 import { iconSVG } from './icons.js';
 
 const $ = (id)=>document.getElementById(id);
@@ -319,7 +319,10 @@ async function renderWorldMap(mode){
 
   const unlocked = state.getUnlockedCount(mode.id);
   const unlockedChapters = Math.ceil(unlocked / CHAPTER_SIZE);
-  const ceilingChapters = Math.ceil(1000/CHAPTER_SIZE); // this build's documented content range
+  // Was a hardcoded 1000 here, disconnected from content.js's own
+  // CONTENT_CEILING_LEVELS constant — bumping that constant alone silently
+  // did nothing to the World Map, since this never read it. Now it does.
+  const ceilingChapters = Math.ceil(CONTENT_CEILING_LEVELS/CHAPTER_SIZE);
   const totalToShow = Math.min(ceilingChapters, Math.max(3, unlockedChapters + 2));
 
   const chapterNums = Array.from({ length: totalToShow }, (_, i)=>i+1);
