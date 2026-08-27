@@ -16,6 +16,17 @@ let unlocked = false; // browsers block audio until a user gesture
 // name -> HTMLAudioElement | null (null = probed, not found)
 const musicCache = new Map();
 const sfxCache = new Map();
+// name -> array of callbacks waiting on a probe that's already in flight.
+// Without this, two calls for the same key made before the first probe
+// resolves (e.g. the module-load pre-warm below racing a real user tap on
+// a slower network, like an actual deployed host vs. localhost) would each
+// kick off their own probe() and end up with two *separate* <audio>
+// elements for the same file — both get played, and you hear the same
+// track twice, out of phase. Coalescing here means every caller for a
+// given key, however many arrive before it resolves, shares one probe and
+// one element.
+const musicPending = new Map();
+const sfxPending = new Map();
 let currentMusic = null; // { key, el }
 
 function probe(baseUrl, onReady){
@@ -36,15 +47,22 @@ function probe(baseUrl, onReady){
   tryNext();
 }
 
-function getMusic(key, cb){
-  if(musicCache.has(key)){ cb(musicCache.get(key)); return; }
-  probe(MUSIC_DIR + key, (el) => { musicCache.set(key, el); cb(el); });
+// Shared cache+coalesce logic behind getMusic/getSfx — see musicPending's
+// comment above for why the pending-queue step matters.
+function getCached(dir, cache, pending, key, cb){
+  if(cache.has(key)){ cb(cache.get(key)); return; }
+  if(pending.has(key)){ pending.get(key).push(cb); return; }
+  pending.set(key, [cb]);
+  probe(dir + key, (el) => {
+    cache.set(key, el);
+    const waiters = pending.get(key) || [];
+    pending.delete(key);
+    waiters.forEach(fn => fn(el));
+  });
 }
 
-function getSfx(key, cb){
-  if(sfxCache.has(key)){ cb(sfxCache.get(key)); return; }
-  probe(SFX_DIR + key, (el) => { sfxCache.set(key, el); cb(el); });
-}
+function getMusic(key, cb){ getCached(MUSIC_DIR, musicCache, musicPending, key, cb); }
+function getSfx(key, cb){ getCached(SFX_DIR, sfxCache, sfxPending, key, cb); }
 
 // Warm the menu theme into the cache as soon as this module loads — a
 // silent network preload, no playback. By the time the player actually
@@ -132,20 +150,20 @@ function fadeTo(el, target, ms, onDone){
 }
 
 function switchMusic(key, { volume = 0.35, fadeMs = 600 } = {}){
-  // Only skip re-triggering if that track is both current *and* actually
-  // confirmed playing — see the .confirmed handling below for why that
-  // distinction is the whole fix for a real bug: the very first play()
-  // attempt right after the page's first tap can get blocked by the
-  // browser's autoplay gate even though the tap was genuine (a Chromium
-  // activation-propagation timing quirk, not a code mistake). The old
-  // code marked currentMusic as that key regardless of whether play()
-  // actually succeeded, so every later legitimate call (a screen change,
-  // starting a level) saw "already on this track" and silently no-op'd
-  // forever — the track never played until something bypassed this check
-  // entirely, like the sound toggle calling .play() directly. Rolling
-  // currentMusic back to null on a failed attempt lets the next real call
-  // retry cleanly instead of getting stuck.
-  if(currentMusic && currentMusic.key === key && currentMusic.confirmed) return;
+  // Skip re-triggering whenever that track is already current — whether
+  // its play() has *confirmed* yet or is still pending, not just once
+  // confirmed. Screen transitions fire this back-to-back synchronously
+  // (splash -> loading -> modes each call playMenuTheme() on the way),
+  // and before this guard covered the pending state too, the second call
+  // would land while the first's play() promise hadn't resolved yet,
+  // treat itself as a fresh switch, and restart a competing fade-out (with
+  // its pause+currentTime-reset callback) and fade-in *on the very track
+  // it was about to redundantly re-play* — audible as a stutter/duplicate.
+  // A failed play() attempt still resets currentMusic to null (see the
+  // .catch below), which is what lets a genuine retry through — that part
+  // of the original fix for "stuck silent after a blocked autoplay" is
+  // unchanged.
+  if(currentMusic && currentMusic.key === key) return;
   const prev = currentMusic;
   currentMusic = null;
   if(prev){
