@@ -8,13 +8,11 @@ progress)."""
 
 from __future__ import annotations
 
-import hashlib
 from datetime import date, datetime, timezone
 
-from .level_gen import get_level
+from .level_gen import get_daily_level
 
 DAILY_MODE = "daily-blessing"
-INDEX_SPAN = 20_000  # keeps the daily rotation from ever repeating within a human lifetime
 SESSION_LENGTH = 1  # one challenge per day, not a multi-level session
 
 
@@ -22,21 +20,19 @@ def _today_utc() -> date:
     return datetime.now(timezone.utc).date()
 
 
-def _index_for_date(d: date) -> int:
-    h = hashlib.sha256(f"faithmatch::daily::{d.isoformat()}".encode()).digest()
-    return int.from_bytes(h[:4], "big") % INDEX_SPAN
-
-
 def get_daily(for_date: str | None = None) -> dict:
     d = date.fromisoformat(for_date) if for_date else _today_utc()
-    base_idx = _index_for_date(d)
 
+    # get_daily_level() pins Daily to its own tuned, moderate difficulty band
+    # (see its docstring in level_gen.py) instead of the old approach of
+    # hashing the date into an arbitrary index on the global tier curve,
+    # which saturated to near-max difficulty on the overwhelming majority of
+    # dates. No extra moves penalty on top either, for the same reason —
+    # the score multiplier below is the daily-engagement hook, not a harder
+    # move budget.
     levels = []
     for i in range(SESSION_LENGTH):
-        level = dict(get_level(DAILY_MODE, base_idx + i))
-        # Daily levels are shorter and punchier than the mode's baseline
-        # curve, and carry a score multiplier as the daily-engagement hook.
-        level["moves"] = max(10, level["moves"] - 3)
+        level = dict(get_daily_level(d.isoformat()))
         level["bonusMultiplier"] = max(level.get("bonusMultiplier") or 1.0, 1.5)
         level["date"] = d.isoformat()
         level["dailySlot"] = i

@@ -30,7 +30,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import db
 from .daily import get_daily
-from .level_gen import CHAPTER_SIZE, CONTENT_CEILING_LEVELS, DIFFICULTY_EASE, get_chapter, get_level
+from .level_gen import CHAPTER_EASE_TABLE, CHAPTER_SIZE, CONTENT_CEILING_LEVELS, get_chapter, get_level
 from .models import AnalyticsEvent, ScoreSubmission
 from .scoring import stars_for, validate_score
 
@@ -59,7 +59,7 @@ VALID_MODES = {"grace-path", "harvest", "refiners-fire", "daily-blessing"}
 @api.get("/health")
 def health() -> dict:
     return {
-        "ok": True, "difficultyEase": DIFFICULTY_EASE, "chapterSize": CHAPTER_SIZE,
+        "ok": True, "chapterEaseTable": CHAPTER_EASE_TABLE, "chapterSize": CHAPTER_SIZE,
         "contentCeilingLevels": CONTENT_CEILING_LEVELS,
     }
 

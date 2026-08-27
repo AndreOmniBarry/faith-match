@@ -30,6 +30,19 @@ let comboMeter = 0;
 const COMBO_METER_CAP = 100;
 let wildcardUsed = false, shrinkTriggered = false;
 
+// Chaos tiers, by match length. 3 stays a plain pop, 4 -> Striped, an L/T
+// intersection -> Wrapped (unchanged, decided separately below). A 5-run
+// used to always become a Color Bomb; it now rolls among three flavors —
+// Color Bomb keeps exactly its old rarity/frequency (it's simply 1-of-3
+// outcomes at the same trigger condition, not scarcer), the other two add
+// genuinely different chaos rather than just reskinning the blast. 6+ is
+// the new rarest tier — naturally rare by construction (a 6-run is far
+// less likely than a 5-run on an 8-color board; no artificial gate needed)
+// and deliberately the single most rewarding thing that can happen.
+const FIVE_MATCH_FLAVORS = ['colorbomb','comet','frostbloom'];
+const TIER_PRIORITY = { striped:1, wrapped:2, comet:3, frostbloom:3, colorbomb:4, halo:5 };
+const HALO_GEM_BONUS = 3;
+
 const sleep = (ms)=>new Promise(res=>setTimeout(res,ms));
 const rand = (n)=>Math.floor(Math.random()*n);
 
@@ -68,17 +81,22 @@ function checkLine(get,r,c){
   while(rr<rows && get(rr,c)===t){run++;rr++;}
   return run>=3;
 }
-function wouldMatch(r1,c1,r2,c2){
-  const t1 = typeAt(r1,c1), t2 = typeAt(r2,c2);
+// `at` defaults to the live-grid typeAt so every existing call site
+// (hasPossibleMove(), findValidSwapHint(), etc.) is unaffected — but it can
+// be pointed at an arbitrary candidate accessor instead, which is what lets
+// reshuffleBoard() actually validate a shuffle *before* committing it (see
+// its comment).
+function wouldMatch(r1,c1,r2,c2, at=typeAt){
+  const t1 = at(r1,c1), t2 = at(r2,c2);
   if(t1===t2 || t1<0 || t2<0) return false;
-  const get = (r,c)=> (r===r1&&c===c1) ? t2 : (r===r2&&c===c2) ? t1 : typeAt(r,c);
+  const get = (r,c)=> (r===r1&&c===c1) ? t2 : (r===r2&&c===c2) ? t1 : at(r,c);
   return checkLine(get,r1,c1) || checkLine(get,r2,c2);
 }
-function hasPossibleMove(){
+function hasPossibleMove(at=typeAt){
   for(let r=0;r<rows;r++){
     for(let c=0;c<cols;c++){
-      if(c+1<cols && wouldMatch(r,c,r,c+1)) return true;
-      if(r+1<rows && wouldMatch(r,c,r+1,c)) return true;
+      if(c+1<cols && wouldMatch(r,c,r,c+1,at)) return true;
+      if(r+1<rows && wouldMatch(r,c,r+1,c,at)) return true;
     }
   }
   return false;
@@ -213,16 +231,23 @@ function pickAnchor(run, preferred){
   return pool[Math.floor(pool.length/2)];
 }
 
-// Priority: 5+-in-a-row -> Color Bomb, L/T intersection -> Wrapped, 4-in-a-row -> Striped.
+// Priority: 6+-in-a-row -> Halo Bomb, 5-in-a-row -> one of three flavors
+// (Color Bomb / Comet / Frostbloom, see FIVE_MATCH_FLAVORS), L/T
+// intersection -> Wrapped, 4-in-a-row -> Striped.
 function decideCreations(runs){
   const used = new Set();
   const creations = [];
 
   runs.map((r,i)=>i).sort((a,b)=>runs[b].length-runs[a].length).forEach(i=>{
     if(used.has(i)) return;
-    if(runs[i].length>=5){
+    if(runs[i].length>=6){
       const anchor = pickAnchor(runs[i], swapAnchorCells);
-      creations.push({ r:anchor[0], c:anchor[1], special:{kind:'colorbomb'} });
+      creations.push({ r:anchor[0], c:anchor[1], special:{kind:'halo'} });
+      used.add(i);
+    }else if(runs[i].length===5){
+      const anchor = pickAnchor(runs[i], swapAnchorCells);
+      const flavor = FIVE_MATCH_FLAVORS[rand(FIVE_MATCH_FLAVORS.length)];
+      creations.push({ r:anchor[0], c:anchor[1], special:{kind:flavor} });
       used.add(i);
     }
   });
@@ -286,6 +311,71 @@ function mostCommonTypeOnBoard(){
 
 function pointsForLength(len){ return 30 + (len-3)*40; }
 
+// ---------- Comet: the game's first "smart-targeting" special. Instead of
+// a color-wide clear or a fixed blast radius, it scores every occupied
+// cell by how useful clearing it would be right now (locally dense same-
+// type clusters always count; whatever the level's objective needs most
+// counts extra) and detonates a small blast at the 3 best, spread-out
+// spots — not just "bigger," a genuinely different kind of special. ----------
+function cometCellScore(r,c){
+  const id = grid[r][c];
+  if(id==null) return -1;
+  const type = tilesById.get(id).type;
+  let score = 0;
+  for(let dr=-1;dr<=1;dr++) for(let dc=-1;dc<=1;dc++){
+    const rr=r+dr, cc=c+dc;
+    if(rr<0||rr>=rows||cc<0||cc>=cols) continue;
+    if(typeAt(rr,cc)===type) score++;
+  }
+  if(level.objective==='collect'){
+    const wanted = new Set((level.collect||[])
+      .filter(req=>(collectProgress[req.type]||0) < req.count)
+      .map(req=>req.type));
+    if(wanted.has(type)) score += 12;
+  }else if(level.objective==='veil'){
+    const adj = [[r-1,c],[r+1,c],[r,c-1],[r,c+1]];
+    score += adj.filter(([ar,ac])=>ar>=0&&ar<rows&&ac>=0&&ac<cols&&veilGrid[ar][ac]>0).length * 8;
+  }
+  return score;
+}
+function cometTargetCells(){
+  const candidates = [];
+  for(let r=0;r<rows;r++) for(let c=0;c<cols;c++){
+    const s = cometCellScore(r,c);
+    if(s>=0) candidates.push({ r, c, score:s });
+  }
+  candidates.sort((a,b)=>b.score-a.score);
+  const picks = [];
+  for(const cand of candidates){
+    if(picks.length>=3) break;
+    if(picks.some(p=>Math.abs(p.r-cand.r)<=2 && Math.abs(p.c-cand.c)<=2)) continue; // keep the 3 hits spread apart
+    picks.push(cand);
+  }
+  const cells = [];
+  picks.forEach(p=>{
+    for(let dr=-1;dr<=1;dr++) for(let dc=-1;dc<=1;dc++){
+      const rr=p.r+dr, cc=p.c+dc;
+      if(rr>=0&&rr<rows&&cc>=0&&cc<cols) cells.push([rr,cc]);
+    }
+  });
+  return { cells, targets: picks };
+}
+
+// ---------- Frostbloom: a diamond region around the activation point,
+// cleared in this same pass (so the model stays simple/correct — no
+// deferred state), paired with a purely-visual expanding "shatter" ring
+// sequence (effects.frostShatter) so it *reads* as a spreading crack
+// rather than an instant pulse like Wrapped's blast. ----------
+function frostbloomCells(originR, originC){
+  const cells = [];
+  for(let dr=-2;dr<=2;dr++) for(let dc=-2;dc<=2;dc++){
+    if(Math.abs(dr)+Math.abs(dc) > 2) continue; // diamond, not a square
+    const r=originR+dr, c=originC+dc;
+    if(r>=0&&r<rows&&c>=0&&c<cols) cells.push([r,c]);
+  }
+  return cells;
+}
+
 /* ============================= VFX HELPERS ============================= */
 
 function colorForType(type){ return SYMBOLS[type] ? SYMBOLS[type].color : '#f4d78c'; }
@@ -295,7 +385,7 @@ function burstAt(r,c,color,tier){
   const {x,y} = render.cellCenter(r,c);
   effects.burst(x,y,color,tier);
 }
-function triggerSpecialVFX(tile){
+function triggerSpecialVFX(tile, extra){
   const {x,y} = render.cellCenter(tile.r, tile.c);
   const color = colorForType(tile.type);
   if(tile.special.kind==='striped'){
@@ -313,6 +403,18 @@ function triggerSpecialVFX(tile){
     effects.bloom(x,y,'var(--colorbomb-glow)','huge');
     effects.flash('var(--colorbomb-glow)', 480, 'ripple');
     effects.pulseAmbient(700);
+  }else if(tile.special.kind==='comet'){
+    const targets = (extra && extra.targets || []).map(p=>render.cellCenter(p.r,p.c));
+    effects.cometStreak(x,y,targets,'var(--comet-glow)');
+    effects.shake(8,240);
+  }else if(tile.special.kind==='frostbloom'){
+    effects.frostShatter(x,y,'var(--frostbloom-glow)',3);
+    effects.shake(6,220);
+  }else if(tile.special.kind==='halo'){
+    effects.bloom(x,y,'var(--halo-glow)','huge');
+    effects.flash('var(--halo-glow)', 650, 'ripple');
+    effects.pulseAmbient(1000);
+    effects.shake(14,360);
   }
 }
 
@@ -417,21 +519,44 @@ function collapseAndRefill(){
 function reshuffleBoard(){
   const types = [];
   for(let r=0;r<rows;r++) for(let c=0;c<cols;c++) types.push(typeAt(r,c)>=0 ? typeAt(r,c) : rand(colorCount));
+  // Validate the *candidate* shuffle, not the stale pre-shuffle board —
+  // hasPossibleMove()'s default reads live tile state, which this loop
+  // never touches until after it's done, so without an accessor bound to
+  // `types` the old loop was just shuffling blindly up to its attempt cap
+  // with no actual guarantee the result was playable.
+  const candidateAt = (r,c)=>{
+    if(r<0||r>=rows||c<0||c>=cols) return -1;
+    if(veilGrid[r][c] > 0) return -1;
+    return types[r*cols+c];
+  };
   let attempts=0;
   do{
     for(let i=types.length-1;i>0;i--){ const j=rand(i+1); [types[i],types[j]]=[types[j],types[i]]; }
     attempts++;
-  }while(attempts<20 && !hasPossibleMove());
+  }while(attempts<25 && !hasPossibleMove(candidateAt));
+
+  // A genuine "renewal" moment — a bright ripple across the board, then
+  // every tile resolves to its new face in a radial wave outward from
+  // center instead of all flipping at once. Shared by both the rare
+  // auto-reshuffle-on-deadlock (resolveLoop) and the Rainbow Shuffle item.
+  effects.shake(9, 260);
+  effects.flash('var(--gold-soft)', 520, 'ripple');
+  const cr = (rows-1)/2, cc = (cols-1)/2;
   let idx=0;
   for(let r=0;r<rows;r++){
     for(let c=0;c<cols;c++){
       if(veilGrid[r][c]>0){ idx++; continue; } // leave veiled cells' candy untouched
       const id = grid[r][c];
       const t = tilesById.get(id);
-      t.type = types[idx++];
-      t.special = null;
-      render.refreshTileVisual(t);
-      t.el.classList.add('spawn-special');
+      const newType = types[idx++];
+      const dist = Math.hypot(r-cr, c-cc);
+      setTimeout(()=>{
+        if(!t.el) return; // level could have ended mid-sweep
+        t.type = newType;
+        t.special = null;
+        render.refreshTileVisual(t);
+        t.el.classList.add('spawn-special');
+      }, 60 + dist*35);
     }
   }
 }
@@ -462,6 +587,7 @@ async function resolveLoop(seed){
 
     const activatedIds = new Set();
     let biggestTier = null;
+    let haloActivated = false;
     while(activationQueue.length){
       const id = activationQueue.pop();
       if(activatedIds.has(id)) continue;
@@ -469,15 +595,21 @@ async function resolveLoop(seed){
       if(!t) continue;
       activatedIds.add(id);
       matchedSet.add(t.r+','+t.c);
-      let cells;
-      if(t.special.kind==='colorbomb'){
+      let cells, vfxExtra;
+      if(t.special.kind==='colorbomb' || t.special.kind==='halo'){
         const targetType = (isManualPass && id===seed.singleActivation.tileId && manualTarget!=null) ? manualTarget : mostCommonTypeOnBoard();
         cells = cellsOfType(targetType);
-        biggestTier = 'colorbomb';
+        if(t.special.kind==='halo') haloActivated = true;
+      }else if(t.special.kind==='comet'){
+        const picked = cometTargetCells();
+        cells = picked.cells;
+        vfxExtra = { targets: picked.targets };
+      }else if(t.special.kind==='frostbloom'){
+        cells = frostbloomCells(t.r, t.c);
       }else{
         cells = getActivationCells(t);
-        if(biggestTier!=='colorbomb') biggestTier = t.special.kind;
       }
+      if((TIER_PRIORITY[t.special.kind]||0) > (TIER_PRIORITY[biggestTier]||0)) biggestTier = t.special.kind;
       cells.forEach(([r,c])=>{
         matchedSet.add(r+','+c);
         const eid = grid[r][c];
@@ -486,13 +618,33 @@ async function resolveLoop(seed){
           if(et && et.special && !activatedIds.has(eid)) activationQueue.push(eid);
         }
       });
-      triggerSpecialVFX(t);
+      triggerSpecialVFX(t, vfxExtra);
     }
 
     if(matchedSet.size===0) break;
     if(activatedIds.size>0){ audio.playSpecialSound(biggestTier); }
 
     crackAdjacentVeils(matchedSet);
+
+    // Halo Bomb's bonus payload — beyond the color-wide clear it shares
+    // with Color Bomb, it's deliberately the single most rewarding moment
+    // in the game: every veil on the board falls at once, the Combo Surge
+    // meter tops off, and a flat gem bonus lands straight in the wallet
+    // (via callbacks.onGemsEarned — engine.js doesn't own the persistent
+    // economy, screens.js/rewards.js does, same separation as everywhere
+    // else "chaos" meets progression).
+    if(haloActivated){
+      for(let r=0;r<rows;r++) for(let c=0;c<cols;c++){
+        if(veilGrid[r][c] > 0){
+          veilGrid[r][c] = 0;
+          const vid = grid[r][c];
+          if(vid!=null){ const vt = tilesById.get(vid); vt.veil = 0; render.refreshTileVisual(vt); }
+        }
+      }
+      comboMeter = COMBO_METER_CAP;
+      callbacks.onGemsEarned && callbacks.onGemsEarned(HALO_GEM_BONUS);
+      callbacks.onToast && callbacks.onToast(`✨ Halo Bomb! Every veil cleared, Combo Surge charged, +${HALO_GEM_BONUS} gems!`);
+    }
 
     const creations = decideCreations(runs);
 
@@ -553,18 +705,29 @@ async function resolveLoop(seed){
   }
 
   if(!hasPossibleMove()){
+    // Genuinely rare in practice (fresh-board deadlock odds are ~0 even at
+    // max board size/color count) — this is the safety net for the rest,
+    // and it should read as an intentional moment when it fires, not a
+    // glitch. reshuffleBoard() carries its own flash/shake/radial-reveal.
     await sleep(250);
     callbacks.onToast && callbacks.onToast('The board is renewed…');
     reshuffleBoard();
-    await sleep(400);
+    await sleep(500);
   }
 }
 
 /* ============================= COMBO PAIRING ============================= */
 
+// For pairing purposes only, Comet/Frostbloom behave like Wrapped and Halo
+// behaves like Color Bomb — same idea as TIER_PRIORITY above, just for
+// picking which blast *pattern* a pairing uses. The real kind (and a real
+// Halo's bigger payoff, below) still comes through everywhere else.
+const PAIR_TIER = { striped:'striped', wrapped:'wrapped', comet:'wrapped', frostbloom:'wrapped', colorbomb:'colorbomb', halo:'colorbomb' };
+
 async function resolveComboPair(tA, tB){
   const pivot = { r:tA.r, c:tA.c };
   const kindA = tA.special.kind, kindB = tB.special.kind;
+  const pairA = PAIR_TIER[kindA] || kindA, pairB = PAIR_TIER[kindB] || kindB;
   const cells = new Set([`${tA.r},${tA.c}`, `${tB.r},${tB.c}`]);
   let vfxColor = 'var(--gold-soft)';
   let bonus = 0;
@@ -572,23 +735,23 @@ async function resolveComboPair(tA, tB){
   const addRow = (r)=>{ for(let c=0;c<cols;c++) cells.add(`${r},${c}`); };
   const addCol = (c)=>{ for(let r=0;r<rows;r++) cells.add(`${r},${c}`); };
 
-  if(kindA==='striped' && kindB==='striped'){
+  if(pairA==='striped' && pairB==='striped'){
     addRow(pivot.r); addCol(pivot.c); bonus=600;
-  }else if((kindA==='striped'&&kindB==='wrapped')||(kindA==='wrapped'&&kindB==='striped')){
+  }else if((pairA==='striped'&&pairB==='wrapped')||(pairA==='wrapped'&&pairB==='striped')){
     for(let dr=-1;dr<=1;dr++){ const r=pivot.r+dr; if(r>=0&&r<rows) addRow(r); }
     for(let dc=-1;dc<=1;dc++){ const c=pivot.c+dc; if(c>=0&&c<cols) addCol(c); }
     bonus=900; vfxColor='var(--wrapped-glow)';
-  }else if(kindA==='wrapped' && kindB==='wrapped'){
+  }else if(pairA==='wrapped' && pairB==='wrapped'){
     for(let dr=-2;dr<=2;dr++) for(let dc=-2;dc<=2;dc++){
       const r=pivot.r+dr, c=pivot.c+dc;
       if(r>=0&&r<rows&&c>=0&&c<cols) cells.add(`${r},${c}`);
     }
     bonus=1400; vfxColor='var(--wrapped-glow)';
-  }else if(kindA==='colorbomb' && kindB==='colorbomb'){
+  }else if(pairA==='colorbomb' && pairB==='colorbomb'){
     for(let r=0;r<rows;r++) for(let c=0;c<cols;c++) cells.add(`${r},${c}`);
     bonus=2000; vfxColor='var(--colorbomb-glow)';
   }else{
-    const bombIsA = kindA==='colorbomb';
+    const bombIsA = pairA==='colorbomb';
     const partner = bombIsA ? tB : tA;
     const targetType = partner.type;
     for(let r=0;r<rows;r++) for(let c=0;c<cols;c++){
@@ -597,7 +760,7 @@ async function resolveComboPair(tA, tB){
       const t = tilesById.get(id);
       if(t.type!==targetType) continue;
       cells.add(`${r},${c}`);
-      const fake = { r, c, special: partner.special.kind==='striped'
+      const fake = { r, c, special: (PAIR_TIER[partner.special.kind]||partner.special.kind)==='striped'
         ? { kind:'striped', dir: Math.random()<0.5?'h':'v' }
         : { kind:'wrapped' } };
       getActivationCells(fake).forEach(([rr,cc])=>cells.add(`${rr},${cc}`));
@@ -606,8 +769,26 @@ async function resolveComboPair(tA, tB){
     vfxColor = 'var(--colorbomb-glow)';
   }
 
+  // A real Halo in the pair still pays out like the game's biggest moment,
+  // even filtered through another special's pattern above — bigger bonus,
+  // its own glow, and the same board-wide veil-clear + meter-fill + gem
+  // bonus a solo Halo activation gets (see resolveLoop).
+  const haloInPair = kindA==='halo' || kindB==='halo';
+  if(haloInPair){
+    bonus = Math.round(bonus * 1.5) + 500;
+    vfxColor = 'var(--halo-glow)';
+    for(let r=0;r<rows;r++) for(let c=0;c<cols;c++){
+      if(veilGrid[r][c] > 0){
+        veilGrid[r][c] = 0;
+        const vid = grid[r][c];
+        if(vid!=null){ const vt = tilesById.get(vid); vt.veil = 0; render.refreshTileVisual(vt); }
+      }
+    }
+    callbacks.onGemsEarned && callbacks.onGemsEarned(HALO_GEM_BONUS);
+  }
+
   score += Math.round(bonus * (level.bonusMultiplier||1));
-  comboMeter = Math.min(COMBO_METER_CAP, comboMeter + 40);
+  comboMeter = haloInPair ? COMBO_METER_CAP : Math.min(COMBO_METER_CAP, comboMeter + 40);
   const {x,y} = render.cellCenter(pivot.r, pivot.c);
   effects.flash(vfxColor, 520, 'ripple');
   effects.shake(16, 380);
@@ -615,6 +796,7 @@ async function resolveComboPair(tA, tB){
   effects.bloom(x,y,vfxColor,'huge');
   audio.playSpecialSound('combo');
   effects.comboPopup(2);
+  if(haloInPair) callbacks.onToast && callbacks.onToast(`✨ Halo Combo! Every veil cleared, +${HALO_GEM_BONUS} gems!`);
 
   crackAdjacentVeils(cells);
   tallyCollect(cells, new Set());
@@ -757,6 +939,9 @@ function checkEndConditions(){
     }, 350);
   }else{
     busy = false;
+    // The board just went idle — if a Surge tap got queued while it was
+    // still resolving (see popComboMeter()), this is the moment it lands.
+    if(pendingSurge && comboMeter >= COMBO_METER_CAP) fireSurge();
   }
 }
 
@@ -779,17 +964,34 @@ function getComboMeter(){ return comboMeter; }
 // but the score line and the toast are guaranteed every single time.
 const SURGE_BASE_BONUS = 120;
 
+// True once a tap has been accepted but the board wasn't idle yet to
+// resolve it — see popComboMeter()/checkEndConditions() below.
+let pendingSurge = false;
+
 async function popComboMeter(){
   if(comboMeter < COMBO_METER_CAP) return false;
-  // The meter shows "ready" the instant it hits the cap, but a cascade
-  // from the match that filled it can still be resolving (busy=true) for
-  // a few hundred ms after. A tap that lands in that window used to be
-  // silently dropped — the meter would sit there full and dead until the
-  // *next* match happened to catch it "not busy", which read as "does
-  // nothing" more often than not. Wait for the board to settle instead of
-  // discarding the tap.
-  for(let waited=0; busy && waited<1500; waited+=60) await sleep(60);
-  if(comboMeter < COMBO_METER_CAP || busy) return false; // still busy, or something else drained it meanwhile
+  if(busy){
+    // The meter shows "ready" the instant it hits the cap, but a cascade
+    // from the match that filled it can still be resolving for a while
+    // after. The old fix here was a fixed ~1500ms wait that gave up and
+    // silently dropped the tap if the cascade ran long — the meter would
+    // sit there looking full and just do nothing, which is exactly the
+    // "worked 3/4 times, then nothing" bug. Instead: queue it. The very
+    // next time the board goes idle, checkEndConditions() below fires it
+    // for us — the tap is never lost, and the toast here means it's never
+    // silent either.
+    if(!pendingSurge){
+      pendingSurge = true;
+      callbacks.onToast && callbacks.onToast('Surge queued — finishing this combo…');
+    }
+    return false;
+  }
+  return fireSurge();
+}
+
+async function fireSurge(){
+  pendingSurge = false;
+  if(comboMeter < COMBO_METER_CAP) return false; // nothing left to fire (shouldn't happen — meter never drains except here)
   comboMeter = 0;
   busy = true;
   notifyHUD();
@@ -878,8 +1080,7 @@ async function useHammer(r,c){
 }
 function useRainbowShuffle(){
   if(busy) return false;
-  reshuffleBoard();
-  effects.flash('var(--gold-soft)',400);
+  reshuffleBoard(); // carries its own flash/shake/radial-reveal now
   audio.playSpecialSound('striped');
   notifyHUD();
   return true;
@@ -889,6 +1090,70 @@ function useColorBombGift(){
   const ok = spawnFreeColorBomb();
   if(ok) audio.playSpecialSound('colorbomb');
   return ok;
+}
+
+// Sky Hook: swap any two tiles on the board, however far apart — the
+// player picks both cells via screens.js's existing tap-to-select flow
+// (not a drag), so this never touches the drag/swap gesture math. No
+// adjacency requirement, no move spent, and it doesn't require the result
+// to immediately match — it's a repositioning tool first, a match-maker
+// second. A teleport, not a slide: a beam linking the two spots instead of
+// the usual squash-stretch glide, so it reads as genuinely different from
+// a normal swap. Deliberately doesn't replicate the special+special combo-
+// pairing branch attemptSwap() has — any specials caught in a resulting
+// run still activate normally, this just doesn't force it.
+async function useSkyHook(a, b){
+  if(busy) return false;
+  if(!isSwappable(a.r,a.c) || !isSwappable(b.r,b.c)) return false;
+  const idA = grid[a.r][a.c], idB = grid[b.r][b.c];
+  if(idA==null || idB==null || idA===idB) return false;
+  busy = true;
+  const tA = tilesById.get(idA), tB = tilesById.get(idB);
+  const posA = render.cellCenter(a.r,a.c), posB = render.cellCenter(b.r,b.c);
+
+  grid[a.r][a.c] = idB; grid[b.r][b.c] = idA;
+  tA.r=b.r; tA.c=b.c; tB.r=a.r; tB.c=a.c;
+  render.setTileTransform(tA.el, tA.r, tA.c);
+  render.setTileTransform(tB.el, tB.r, tB.c);
+  effects.beam(posA.x,posA.y,posB.x,posB.y,'var(--comet-glow)');
+  tA.el.classList.add('spawn-special'); tB.el.classList.add('spawn-special');
+  audio.playSpecialSound('skyhook');
+  await sleep(SWAP_MS);
+
+  swapAnchorCells = [[tA.r,tA.c],[tB.r,tB.c]];
+  await resolveLoop({});
+  swapAnchorCells = null;
+  notifyHUD();
+  checkEndConditions();
+  return true;
+}
+
+// Refiner's Ward: cracks every currently-veiled tile on the board by one
+// layer at once — a board-wide version of the Hammer's single-tile crack
+// (the Hammer fully destroys one veil instantly; this gently thins every
+// veil on the board by one layer instead), aimed at Refiner's Fire's
+// toughest boards specifically.
+function useRefinersWard(){
+  if(busy) return false;
+  let cracked = 0;
+  for(let r=0;r<rows;r++){
+    for(let c=0;c<cols;c++){
+      if(veilGrid[r][c] > 0){
+        veilGrid[r][c]--;
+        const id = grid[r][c];
+        if(id!=null){ const t = tilesById.get(id); t.veil = veilGrid[r][c]; render.refreshTileVisual(t); }
+        cracked++;
+      }
+    }
+  }
+  if(cracked>0){
+    audio.playVeilCrack();
+    effects.flash('var(--wrapped-glow)', 420);
+    effects.pulseAmbient(600);
+  }
+  notifyHUD();
+  checkEndConditions();
+  return cracked>0;
 }
 
 function starsFor(finalScore, target){
@@ -905,7 +1170,7 @@ async function startLevel(lvl, boardEl){
   score = 0; comboStep = 0; busy = false; swapAnchorCells = null;
   movesLeft = lvl.moves; movesUsed = 0;
   collectProgress = {};
-  comboMeter = 0; wildcardUsed = false; shrinkTriggered = false;
+  comboMeter = 0; wildcardUsed = false; shrinkTriggered = false; pendingSurge = false;
 
   render.setBoardEl(boardEl);
   await render.getReady(); // WebGL init + procedural tile textures are async on first use
@@ -947,5 +1212,5 @@ export {
   isAdjacent, getIdleVisualTargets, getTileElAt,
   addMoves, forceLose,
   getComboMeter, popComboMeter,
-  useHammer, useRainbowShuffle, useColorBombGift,
+  useHammer, useRainbowShuffle, useColorBombGift, useSkyHook, useRefinersWard,
 };

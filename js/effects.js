@@ -111,6 +111,35 @@ function bloom(x,y,color,tier){
   setTimeout(()=>burst(x,y,color, tier==='huge'?'medium':'small'), 90);
 }
 
+// Frostbloom's signature — an expanding sequence of rings radiating from
+// the activation point, reading as a spreading crack/shatter wave rather
+// than one instant pulse. Purely visual (the tiles it affects are already
+// cleared by the time this plays out) — built entirely from the existing
+// ring()/burst() primitives, no new particle kind needed.
+function frostShatter(x, y, color, ringCount){
+  const app = ensureLayers();
+  if(!app) return;
+  burst(x,y,color,'medium');
+  const steps = Math.max(1, ringCount||3);
+  for(let i=0;i<=steps;i++){
+    setTimeout(()=>ring(x, y, color, 6 + i*16), i*70);
+  }
+}
+
+// Comet's signature — a streak toward each smart-picked target followed by
+// its own small impact burst, staggered slightly so the three hits read as
+// a sequence, not one simultaneous blast.
+function cometStreak(x0, y0, targets, color){
+  const app = ensureLayers();
+  if(!app) return;
+  (targets||[]).forEach((t,i)=>{
+    setTimeout(()=>{
+      trail(x0,y0,t.x,t.y,color);
+      burst(t.x,t.y,color,'medium');
+    }, i*90);
+  });
+}
+
 /* ---------- screen shake (still the DOM board-arch frame) ---------- */
 function shake(magnitude, duration){
   if(!boardArch) return;
@@ -216,5 +245,6 @@ function hintSparkle(handleA, handleB){
 
 export {
   init, resizeCanvas, burst, ring, beam, trail, bloom, shake, flash, pulseAmbient,
+  frostShatter, cometStreak,
   comboPopup, confettiBurst, idleShimmer, hintSparkle,
 };

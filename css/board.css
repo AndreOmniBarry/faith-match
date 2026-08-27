@@ -40,6 +40,8 @@
 }
 body.hammer-mode .board{ cursor:crosshair; }
 body.hammer-mode .board-arch{ box-shadow:inset 0 0 0 2px #ff8a5c, inset 0 0 30px rgba(255,138,92,.25), 0 20px 50px -20px rgba(0,0,0,.7); }
+body.sky-hook-mode .board{ cursor:crosshair; }
+body.sky-hook-mode .board-arch{ box-shadow:inset 0 0 0 2px var(--comet-glow), inset 0 0 30px rgba(255,157,77,.25), 0 20px 50px -20px rgba(0,0,0,.7); }
 .fx-canvas{
   /* This used to be a purely decorative particle overlay (pointer-events:
      none) sitting above the interactive DOM tiles. It's now the actual

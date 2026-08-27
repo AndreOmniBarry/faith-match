@@ -85,8 +85,12 @@ let idleTimer = null;
 let lastInteraction = 0;
 let hintClear = null;
 let hammerArmed = false;
+let skyHookArmed = false;
+let skyHookFirstCell = null;
 let timerInterval = null;
 let timeRemaining = 0;
+let slowMoUntil = 0; // Date.now() timestamp — see Slow-Mo Sand in startTimer()
+let slowMoSkipNext = false;
 const IDLE_MS = 6000;
 
 /* ============================= SPLASH / LOADING ============================= */
@@ -525,10 +529,18 @@ function updateHUD(s){
 function stopTimer(){ if(timerInterval){ clearInterval(timerInterval); timerInterval=null; } }
 function startTimer(level){
   stopTimer();
+  slowMoUntil = 0; slowMoSkipNext = false; // fresh level, no leftover Slow-Mo window
   if(!level.timedSeconds) return;
   timeRemaining = level.timedSeconds;
   timerInterval = setInterval(()=>{
     if(engine.isBusy()){ /* don't tick mid-resolve, keeps it fair */ return; }
+    // Slow-Mo Sand: skip every other real-second tick while active, so the
+    // countdown effectively runs at half speed for its duration — a
+    // cheaper, less binary alternative to Freeze's full pause.
+    if(Date.now() < slowMoUntil){
+      slowMoSkipNext = !slowMoSkipNext;
+      if(slowMoSkipNext) return;
+    }
     timeRemaining--;
     const badge = $('timer-badge');
     badge.textContent = formatTime(Math.max(0,timeRemaining));
@@ -590,6 +602,29 @@ function onBoardPointerDown(e){
     hammerArmed = false;
     document.body.classList.remove('hammer-mode');
     engine.useHammer(cell.r, cell.c);
+    return;
+  }
+
+  if(skyHookArmed){
+    // Two taps, not a drag — reuses the same tap-to-select highlighting as
+    // normal play, just without the adjacency requirement on the second
+    // tap. Never touches the pointermove/pointerup drag path below.
+    if(!skyHookFirstCell){
+      skyHookFirstCell = cell;
+      setSelection(cell);
+      showToast('Now tap where to send it.', 1800);
+      return;
+    }
+    const first = skyHookFirstCell;
+    skyHookArmed = false;
+    skyHookFirstCell = null;
+    document.body.classList.remove('sky-hook-mode');
+    clearSelection();
+    if(first.r===cell.r && first.c===cell.c){
+      showToast('Sky Hook cancelled.', 1200);
+      return;
+    }
+    engine.useSkyHook(first, cell);
     return;
   }
 
@@ -734,6 +769,39 @@ function useInventoryItem(id){
     closeTray();
     return;
   }
+  if(id==='lifeline'){
+    if(lives.getLives() >= lives.getCap()){ showToast('Lives are already full.', 1400); return; }
+    if(!rewards.useItem('lifeline')) return;
+    lives.addLives(1);
+    updateStatusBar();
+    showToast('❤️ Lifeline! +1 life.', 1400);
+    closeTray();
+    return;
+  }
+  if(id==='slowMoSand'){
+    if(!currentLevel.timedSeconds || !timerInterval){ showToast('Slow-Mo only works on a timed level.', 1600); return; }
+    if(!rewards.useItem('slowMoSand')) return;
+    slowMoUntil = Date.now() + 45000;
+    showToast('⏳ Slow-Mo! Countdown halved for 45 seconds.', 1600);
+    closeTray();
+    return;
+  }
+  if(id==='skyHook'){
+    if(!rewards.useItem('skyHook')) return;
+    closeTray();
+    skyHookArmed = true;
+    skyHookFirstCell = null;
+    document.body.classList.add('sky-hook-mode');
+    showToast('Tap a tile, then tap where to send it.', 2000);
+    return;
+  }
+  if(id==='refinersWard'){
+    if(!rewards.useItem('refinersWard')) return;
+    const ok = engine.useRefinersWard();
+    if(!ok){ rewards.addItem('refinersWard', 1); showToast('No veils to crack right now.', 1400); return; }
+    closeTray();
+    return;
+  }
 }
 
 /* ============================= GAME: lives + continue ============================= */
@@ -821,6 +889,10 @@ async function runLevel(level){
     onWin: onLevelWin,
     onLose: onLevelLose,
     onOutOfMoves: offerContinue,
+    // Halo Bomb's gem bonus lands immediately, mid-level — engine.js owns
+    // the "chaos," not the persistent economy, so it hands the amount back
+    // here the same way score/toasts already flow out via callbacks.
+    onGemsEarned: (n)=>rewards.addGems(n),
   });
 
   // Awaited: WebGL init + procedural tile textures are async on first use
@@ -870,10 +942,19 @@ function onLevelWin(s){
     }
   }else if(currentLevel.index!=null){
     state.recordCompletion(currentLevel.mode, currentLevel.index, stars);
-    const gems = rewards.rewardForLevel(stars);
-    if(gems){ rewards.addGems(gems); rewardLines.push(`💎${gems}`); audio.playRewardChime(); }
+    const chapter = Math.floor(currentLevel.index/CHAPTER_SIZE) + 1;
+    const levelReward = rewards.rewardForLevel(stars, chapter);
+    if(levelReward.gems || levelReward.item){
+      let line = levelReward.gems ? `💎${levelReward.gems}` : '';
+      if(levelReward.item){
+        const meta = rewards.ITEMS[levelReward.item];
+        line += (line ? ' + ' : '') + `${meta.emoji} ${meta.name}`;
+      }
+      rewardLines.push(line);
+      audio.playRewardChime();
+    }
     if(isChapterComplete(currentLevel, stars)){
-      const chReward = rewards.rewardForChapter();
+      const chReward = rewards.rewardForChapter(chapter);
       rewardLines.push(`Chapter bonus: 💎${chReward.gems} + ${rewards.ITEMS[chReward.item].emoji} ${rewards.ITEMS[chReward.item].name}`);
       audio.playRewardChime();
     }
