@@ -24,14 +24,15 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import APIRouter, FastAPI, HTTPException
+from fastapi import APIRouter, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from . import db
+from . import account, db
+from .account import AccountError
 from .daily import get_daily
 from .level_gen import CHAPTER_EASE_TABLE, CHAPTER_SIZE, CONTENT_CEILING_LEVELS, get_chapter, get_level
-from .models import AnalyticsEvent, ScoreSubmission
+from .models import AnalyticsEvent, LoginRequest, RegisterRequest, ScoreSubmission, SyncRequest
 from .scoring import stars_for, validate_score
 
 ROOT_DIR = Path(__file__).resolve().parent.parent.parent
@@ -131,6 +132,50 @@ def analytics_event(payload: AnalyticsEvent) -> dict:
 
     db.record_event(payload.event, json.dumps(payload.payload) if payload.payload else None)
     return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Player profiles — see server/app/account.py. Every route here just
+# translates an AccountError (which already carries the right HTTP status)
+# into an HTTPException; the actual logic lives in account.py, not here.
+# ---------------------------------------------------------------------------
+
+@api.post("/account/register")
+def account_register(payload: RegisterRequest) -> dict:
+    try:
+        return account.register(payload.username, payload.password, payload.state)
+    except AccountError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail)
+
+
+@api.post("/account/login")
+def account_login(payload: LoginRequest) -> dict:
+    try:
+        return account.login(payload.username, payload.password)
+    except AccountError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail)
+
+
+@api.post("/account/logout")
+def account_logout(authorization: str | None = Header(default=None)) -> dict:
+    account.logout(authorization)
+    return {"ok": True}
+
+
+@api.get("/account/state")
+def account_state(authorization: str | None = Header(default=None)) -> dict:
+    try:
+        return account.get_state(authorization)
+    except AccountError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail)
+
+
+@api.post("/account/sync")
+def account_sync(payload: SyncRequest, authorization: str | None = Header(default=None)) -> dict:
+    try:
+        return account.sync_state(authorization, payload.state, payload.updatedAt)
+    except AccountError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail)
 
 
 app.include_router(api)

@@ -160,6 +160,46 @@
 .dash-tile .dsub{font-size:11px; color:#7a6ea3; margin-top:4px;}
 .dash-section-title{width:100%; font-size:12px; letter-spacing:.08em; text-transform:uppercase; color:#a89bd1; margin:20px 0 8px;}
 .dash-inventory, .dash-stars{width:100%; display:flex; flex-wrap:wrap; gap:8px;}
+
+.dash-account-row{
+  width:100%; display:flex; align-items:center; gap:12px; text-align:left;
+  background:linear-gradient(160deg, var(--bg-2), var(--bg-1));
+  border:1px solid var(--line); border-radius:16px; padding:12px 14px;
+}
+.dash-account-row .dar-icon{font-size:22px;}
+.dash-account-row .dar-body{flex:1; min-width:0;}
+.dash-account-row .dar-title{display:block; font-size:13px; font-weight:600; color:var(--cream);}
+.dash-account-row .dar-sub{display:block; font-size:11px; color:#9c8fc3; margin-top:2px;}
+.dash-account-row .dar-chevron{color:#9c8fc3; font-size:18px;}
+.dash-account-row.signed-in .dar-title{color:var(--gold-soft);}
+
+/* ---------- ACCOUNT PANEL (reuses the tray-overlay bottom-sheet pattern) ---------- */
+.account-overlay{
+  position:fixed; inset:0; background:rgba(10,7,18,.7); z-index:55;
+  display:flex; align-items:flex-end; justify-content:center; padding:0 16px 24px;
+}
+.account-overlay.hidden{display:none;}
+.account-panel{
+  width:100%; max-width:420px; background:linear-gradient(165deg, var(--bg-2), var(--bg-0));
+  border:1px solid rgba(230,183,84,.35); border-radius:22px; padding:20px;
+  animation:modalIn .25s ease both;
+}
+.account-hint{font-size:12px; color:#9c8fc3; margin:0 0 12px; line-height:1.5;}
+.account-input{
+  width:100%; box-sizing:border-box; padding:12px 14px; margin-bottom:10px;
+  background:rgba(255,255,255,.05); border:1px solid var(--line); border-radius:12px;
+  color:var(--cream); font-size:14px; font-family:var(--font-body);
+}
+.account-input:focus{outline:none; border-color:var(--gold-soft);}
+.account-error{
+  font-size:12px; color:#f0836b; background:rgba(240,131,107,.1);
+  border:1px solid rgba(240,131,107,.3); border-radius:10px; padding:8px 12px; margin-bottom:10px;
+}
+.account-error.hidden{display:none;}
+.account-actions{display:flex; gap:10px; margin-bottom:10px;}
+.account-actions button{flex:1;}
+.account-close{width:100%;}
+.account-sync-status{margin-top:-4px;}
 .dash-item{
   display:flex; align-items:center; gap:6px; background:rgba(255,255,255,.05);
   border:1px solid var(--line); border-radius:14px; padding:8px 12px; font-size:13px;
