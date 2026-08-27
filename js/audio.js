@@ -95,7 +95,19 @@ function ensureAudio(){
   // the actual menu theme here (rather than a throwaway silent element)
   // both unlocks audio and gets the music going immediately, with no
   // second interaction needed.
-  if(unlocked) return;
+  if(unlocked){
+    // Already unlocked, but the very first attempt can still have lost its
+    // gesture-activation window silently: getMusic()'s probe is async, and
+    // on a real (non-instant) network the tap's activation can expire
+    // before el.play() ever actually runs, so it just fails quietly
+    // (switchMusic's .catch resets currentMusic to null). That reads
+    // exactly like "sound says on but won't play" — a real-network-only
+    // bug this session's near-instant localhost tests never hit. Any
+    // later real tap is itself a fresh gesture, so retry here rather than
+    // leaving music silently stuck off for the rest of the session.
+    if(soundOn && !currentMusic) playMenuTheme();
+    return;
+  }
   unlocked = true;
   playMenuTheme();
 }
@@ -122,7 +134,11 @@ function playSurgeSting(){ playSfx('surge', { volume: 0.7 }); }
 function playFinaleSting(){ playSfx('finale', { volume: 0.7 }); }
 function playGateSting(){ playSfx('gate', { volume: 0.65 }); }
 function playStreakSting(){ playSfx('streak', { volume: 0.7 }); }
-function playUiTap(){ playSfx('tap', { volume: 0.35 }); }
+// Called from nearly every button in the app — the natural place to retry
+// music if the very first attempt silently lost its autoplay-gesture
+// window (see ensureAudio()'s comment). Every tap is a fresh, legitimate
+// gesture, so this is a real retry, not a background autoplay attempt.
+function playUiTap(){ ensureAudio(); playSfx('tap', { volume: 0.35 }); }
 function playScreenIn(){ playSfx('screen-in', { volume: 0.4 }); }
 function playScreenBack(){ playSfx('screen-back', { volume: 0.4 }); }
 // Meter reaching full is a distinct moment from actually tapping it to

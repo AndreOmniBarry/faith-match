@@ -1156,11 +1156,21 @@ function useRefinersWard(){
   return cracked>0;
 }
 
-function starsFor(finalScore, target){
-  if(finalScore >= target*1.6) return 3;
-  if(finalScore >= target*1.25) return 2;
-  if(finalScore >= target) return 1;
-  return 0;
+// Score-overshoot was previously the *only* input — a level won efficiently
+// (chaos-assisted, finished early with moves still banked) scored no
+// better than one barely scraped past the line on the last move, which
+// read as exactly the "worked smart, got punished for it" complaint this
+// fixes. Either a strong score overshoot OR real moves left over earns the
+// top rating now — the two are treated as equally impressive, not one
+// counted and the other ignored. movesLeft/totalMoves are optional so any
+// existing caller that only has score+target still gets a sane result.
+function starsFor(finalScore, target, movesLeft, totalMoves){
+  if(finalScore < target) return 0;
+  const scoreRatio = target>0 ? finalScore/target : 1;
+  const efficiency = totalMoves>0 ? Math.max(0, movesLeft||0)/totalMoves : 0;
+  if(scoreRatio >= 1.5 || efficiency >= 0.4) return 3;
+  if(scoreRatio >= 1.15 || efficiency >= 0.15) return 2;
+  return 1;
 }
 
 /* ============================= PUBLIC: LEVEL LIFECYCLE ============================= */
