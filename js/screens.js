@@ -14,6 +14,7 @@ import * as lives from './lives.js';
 import * as rewards from './rewards.js';
 import * as theme from './theme.js';
 import * as splashFx from './splash-fx.js';
+import * as account from './account.js';
 import { SYMBOLS, MODES, modeById, CHAPTER_SIZE, CONTENT_CEILING_LEVELS, getLevel, getChapter, getDaily } from './content.js';
 import { iconSVG } from './icons.js';
 
@@ -168,6 +169,8 @@ function renderDashboard(){
   starsEl.innerHTML = MODES.filter(m=>!m.daily).map(m=>
     `<div class="dash-item">${m.icon} ${m.name} <strong>★${state.getTotalStars(m.id)}</strong></div>`
   ).join('');
+
+  refreshAccountRow();
 }
 
 // The "Next life in ⏱" line was only ever computed at render time — it sat
@@ -188,6 +191,147 @@ function startDashboardClock(){
   dashClockInterval = setInterval(tickDashboardLives, 1000);
 }
 function stopDashboardClock(){ if(dashClockInterval){ clearInterval(dashClockInterval); dashClockInterval=null; } }
+
+/* ============================= PLAYER PROFILE (cross-device sync) ============================= */
+// See js/account.js for the actual register/login/logout/sync calls —
+// this is purely the UI layer: the Dashboard row, the sign-in panel, and
+// the "which progress do you want?" conflict prompt. Never silently
+// overwrites either side of a real divergence between this device's local
+// progress and what's saved to a profile.
+
+function refreshAccountRow(){
+  const row = $('btn-open-account'), title = $('dash-account-title'), sub = $('dash-account-sub');
+  if(!row) return;
+  if(account.isLoggedIn()){
+    title.textContent = `Signed in as ${account.getUsername()}`;
+    sub.textContent = 'Tap to manage your profile';
+    row.classList.add('signed-in');
+  }else{
+    title.textContent = 'Guest — progress stays on this device';
+    sub.textContent = 'Sign in to carry progress to your phone or a new device';
+    row.classList.remove('signed-in');
+  }
+}
+
+// A "fresh" device (nothing played yet) can silently adopt a pulled cloud
+// save with no prompt — there's nothing on this side worth asking about
+// keeping. Anything beyond the untouched default gets the conflict prompt
+// instead of a silent overwrite.
+function isFreshLocalState(){
+  if(rewards.getGems() > 0) return false;
+  if(rewards.getDailyStatus().streak > 0) return false;
+  for(const m of MODES){
+    if(m.daily) continue;
+    if(state.getUnlockedCount(m.id) > 1) return false;
+  }
+  return true;
+}
+
+function reconcileCloudState(cloudState, cloudUpdatedAt){
+  if(!cloudState) return;
+  const localSnapshot = state.snapshot();
+  if(JSON.stringify(cloudState) === JSON.stringify(localSnapshot)) return; // already in sync
+  if(isFreshLocalState()){
+    state.replaceState(cloudState);
+    updateStatusBar();
+    showToast('Welcome back! Progress restored from your profile.', 2200);
+  }else{
+    showAccountConflict(cloudState, cloudUpdatedAt);
+  }
+}
+
+let pendingConflictState = null;
+function showAccountConflict(cloudState, cloudUpdatedAt){
+  pendingConflictState = cloudState;
+  const when = cloudUpdatedAt ? new Date(cloudUpdatedAt*1000).toLocaleDateString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : 'another device';
+  $('account-conflict-detail').textContent = `Your profile has progress saved from ${when} that's different from what's on this device. Which one do you want to keep?`;
+  $('account-conflict-overlay').classList.remove('hidden');
+}
+function closeAccountConflict(){
+  $('account-conflict-overlay').classList.add('hidden');
+  pendingConflictState = null;
+}
+
+// Called once at startup (after state.loadState()) if an account token is
+// already saved on this device — this is the actual mechanic that makes
+// "log in on the new phone, get your progress back" work without the
+// player doing anything beyond having logged in once before.
+async function syncOnLoad(){
+  if(!account.isLoggedIn()) return;
+  const result = await account.pullState().catch(()=>null);
+  if(!result) return; // offline, or the request failed — try again next time a save fires
+  reconcileCloudState(result.state, result.updatedAt);
+}
+
+function showAccountError(msg){
+  const el = $('account-error');
+  el.textContent = msg;
+  el.classList.remove('hidden');
+}
+function clearAccountError(){ $('account-error').classList.add('hidden'); }
+
+function renderAccountPanelState(){
+  const signedOut = $('account-signed-out'), signedIn = $('account-signed-in');
+  if(account.isLoggedIn()){
+    signedOut.classList.add('hidden');
+    signedIn.classList.remove('hidden');
+    $('account-username-display').textContent = account.getUsername();
+    $('account-sync-status').textContent = 'Progress syncs automatically while signed in.';
+  }else{
+    signedOut.classList.remove('hidden');
+    signedIn.classList.add('hidden');
+    $('account-username').value = '';
+    $('account-password').value = '';
+  }
+}
+function openAccountPanel(){
+  clearAccountError();
+  renderAccountPanelState();
+  $('account-overlay').classList.remove('hidden');
+}
+function closeAccountPanel(){ $('account-overlay').classList.add('hidden'); }
+
+async function handleAccountLogin(){
+  const user = $('account-username').value.trim();
+  const pass = $('account-password').value;
+  clearAccountError();
+  if(!user || !pass){ showAccountError('Enter a username and password.'); return; }
+  try{
+    const result = await account.login(user, pass);
+    closeAccountPanel();
+    refreshAccountRow();
+    audio.playRewardChime();
+    reconcileCloudState(result.state, result.updatedAt);
+  }catch(e){
+    showAccountError(e.message || 'Could not log in.');
+  }
+}
+async function handleAccountRegister(){
+  const user = $('account-username').value.trim();
+  const pass = $('account-password').value;
+  clearAccountError();
+  if(!user || !pass){ showAccountError('Enter a username and password.'); return; }
+  try{
+    await account.register(user, pass); // uploads this device's current progress as the starting cloud save
+    closeAccountPanel();
+    refreshAccountRow();
+    showToast('Profile created — your progress will follow you now.', 2200);
+  }catch(e){
+    showAccountError(e.message || 'Could not create a profile.');
+  }
+}
+function handleAccountLogout(){
+  account.logout();
+  refreshAccountRow();
+  closeAccountPanel();
+  showToast('Signed out — progress stays on this device from here.', 1800);
+}
+async function handleAccountSyncNow(){
+  const status = $('account-sync-status');
+  status.textContent = 'Syncing…';
+  const result = await account.pushState();
+  status.textContent = result ? 'Synced just now.' : 'Sync failed — will retry automatically.';
+}
 
 /* ============================= MODE SELECT ============================= */
 
@@ -1068,6 +1212,23 @@ function initNav(){
   $('btn-inventory').addEventListener('click', ()=>{ audio.playUiTap(); openTray(); });
   $('btn-tray-close').addEventListener('click', ()=>{ audio.playUiTap(); closeTray(); });
   $('btn-combo-meter').addEventListener('click', ()=>{ engine.popComboMeter(); });
+  $('btn-open-account').addEventListener('click', ()=>{ audio.playUiTap(); openAccountPanel(); });
+  $('btn-account-close').addEventListener('click', ()=>{ audio.playUiTap(); closeAccountPanel(); });
+  $('btn-account-login').addEventListener('click', handleAccountLogin);
+  $('btn-account-register').addEventListener('click', handleAccountRegister);
+  $('btn-account-logout').addEventListener('click', handleAccountLogout);
+  $('btn-account-sync-now').addEventListener('click', handleAccountSyncNow);
+  $('btn-conflict-use-cloud').addEventListener('click', ()=>{
+    if(pendingConflictState) state.replaceState(pendingConflictState);
+    closeAccountConflict();
+    updateStatusBar();
+    showToast('Loaded your saved progress.', 1800);
+  });
+  $('btn-conflict-use-device').addEventListener('click', ()=>{
+    closeAccountConflict();
+    account.pushState();
+    showToast("Kept this device's progress and saved it to your profile.", 1800);
+  });
   engine.setPointerHandler(onBoardPointerDown);
   window.addEventListener('resize', ()=>{ engine.resizeBoard(); effects.resizeCanvas(); });
   window.addEventListener('orientationchange', ()=>{ engine.resizeBoard(); effects.resizeCanvas(); });
@@ -1080,6 +1241,10 @@ async function initScreens(){
   initSplash();
   initNav();
   showScreen('splash');
+  // Background — never blocks first paint. If this device was signed in
+  // before, this is what actually pulls progress back down (or prompts,
+  // if this device also has real progress of its own to weigh against it).
+  syncOnLoad();
 }
 
 export { initScreens };

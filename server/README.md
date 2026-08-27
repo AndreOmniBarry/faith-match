@@ -34,6 +34,21 @@ client at a different origin via `window.FAITHMATCH_API_BASE` if needed.
 | POST | `/api/score` | submit a run; validated, stars computed, stored |
 | GET | `/api/leaderboard/{mode}/{index}` | top scores for a level |
 | POST | `/api/analytics/event` | fire-and-forget event log |
+| POST | `/api/account/register` | create a profile (username+password); optionally uploads the calling device's current save as the starting cloud state |
+| POST | `/api/account/login` | verify credentials, return a session token + saved state |
+| POST | `/api/account/logout` | invalidate the session token (`Authorization: Bearer <token>`) |
+| GET | `/api/account/state` | fetch the signed-in player's cloud save |
+| POST | `/api/account/sync` | overwrite the cloud save with the calling device's current state (last-write-wins) |
+
+Player profiles (`server/app/account.py`, `auth.py`) are what make progress
+follow a player across devices — see `js/account.js` for the client side.
+Username + password only, no email; passwords are PBKDF2-HMAC-SHA256
+hashed with a per-user salt (stdlib `hashlib`/`secrets`, no external auth
+dependency), never stored or returned in plaintext. **Requires this backend
+to actually be running somewhere with a persistent filesystem** — SQLite's
+`data.db` needs real disk, which most serverless hosts (including a plain
+static Vercel deploy) don't provide by default. No rate-limiting or
+password-recovery flow yet — known, stated limitations, not silent gaps.
 
 ## Why Python here and not in the client
 

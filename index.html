@@ -78,6 +78,15 @@
     <div class="back-row"><button class="icon-btn" id="btn-back-dashboard">←</button><span class="crumb">Modes</span></div>
     <div class="lvl-header"><h2>Your Journey</h2><p>Lives, gems, streak, and what you've earned.</p></div>
     <div class="dash-grid" id="dash-grid"></div>
+    <div class="dash-section-title">Player Profile</div>
+    <button class="dash-account-row" id="btn-open-account">
+      <span class="dar-icon">👤</span>
+      <span class="dar-body">
+        <span class="dar-title" id="dash-account-title">Guest — progress stays on this device</span>
+        <span class="dar-sub" id="dash-account-sub">Sign in to carry progress to your phone or a new device</span>
+      </span>
+      <span class="dar-chevron">›</span>
+    </button>
     <div class="dash-section-title">Inventory</div>
     <div class="dash-inventory" id="dash-inventory"></div>
     <div class="dash-section-title">Stars Earned</div>
@@ -142,6 +151,51 @@
     <div class="modal-stars" id="modal-stars">★★★</div>
     <div class="modal-score"><span>Score</span><span id="modal-score-val">0</span></div>
     <div class="modal-actions" id="modal-actions"></div>
+  </div>
+</div>
+
+<!-- Player Profile: username+password sign-in so progress can follow a
+     player between devices — see js/account.js. Reuses the tray-overlay
+     panel pattern (bottom-sheet style), not the win/lose modal, since this
+     needs real text inputs. -->
+<div class="account-overlay hidden" id="account-overlay">
+  <div class="account-panel">
+    <div class="tray-title">Player Profile</div>
+
+    <div id="account-signed-out">
+      <p class="account-hint">Sign in to carry your progress to another device — no email needed, just a username and password.</p>
+      <input type="text" class="account-input" id="account-username" placeholder="Username" autocomplete="username" maxlength="20">
+      <input type="password" class="account-input" id="account-password" placeholder="Password" autocomplete="current-password">
+      <div class="account-error hidden" id="account-error"></div>
+      <div class="account-actions">
+        <button class="btn-primary" id="btn-account-login">Log In</button>
+        <button class="btn-ghost" id="btn-account-register">Sign Up</button>
+      </div>
+    </div>
+
+    <div class="hidden" id="account-signed-in">
+      <p class="account-hint">Signed in as <strong id="account-username-display"></strong>.</p>
+      <p class="account-hint account-sync-status" id="account-sync-status"></p>
+      <div class="account-actions">
+        <button class="btn-ghost" id="btn-account-sync-now">Sync Now</button>
+        <button class="btn-ghost" id="btn-account-logout">Log Out</button>
+      </div>
+    </div>
+
+    <button class="btn-ghost account-close" id="btn-account-close">Close</button>
+  </div>
+</div>
+
+<!-- Shown only when a login/sync-on-load finds the cloud save and this
+     device's local save genuinely disagree — never silently pick a side. -->
+<div class="account-overlay hidden" id="account-conflict-overlay">
+  <div class="account-panel">
+    <div class="tray-title">Which progress do you want?</div>
+    <p class="account-hint" id="account-conflict-detail">This device's progress is different from what's saved to your profile.</p>
+    <div class="account-actions">
+      <button class="btn-primary" id="btn-conflict-use-cloud">Use My Saved Progress</button>
+      <button class="btn-ghost" id="btn-conflict-use-device">Keep This Device's Progress</button>
+    </div>
   </div>
 </div>
 

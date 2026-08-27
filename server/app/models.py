@@ -17,3 +17,19 @@ class ScoreSubmission(BaseModel):
 class AnalyticsEvent(BaseModel):
     event: str
     payload: Optional[dict] = None
+
+
+class RegisterRequest(BaseModel):
+    username: str
+    password: str
+    state: Optional[dict] = None  # the signing-up device's current local save, if any
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class SyncRequest(BaseModel):
+    state: dict
+    updatedAt: Optional[float] = None
