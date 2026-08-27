@@ -60,11 +60,14 @@ BREATHER_EVERY = 5        # every Nth level inside a run is deliberately a notch
 SIM_PLAYOUTS = 18         # Monte Carlo playouts used to calibrate a score target
 SIM_RANDOM_MOVE_CHANCE = 0.22   # fraction of moves a simulated "average player" plays sub-optimally
 
-# This build's documented content range. Not 1000 hand-authored rows — the
+# This build's documented content range. Not hand-authored rows — the
 # generator below is already unbounded and deterministic; this is the range
-# we're calling "released" for now, per the "scope by 1000 each build" plan.
-# Raise by CHAPTER_SIZE*~67 next time; nothing else here needs to change.
-CONTENT_CEILING_LEVELS = 1000
+# we're calling "released" for now, per the "scope in batches" plan. Raised
+# from 1000 to 1300 (300 more levels, across every mode) — the generator
+# itself needed no changes, just this number. js/content.js mirrors this
+# constant exactly, and js/screens.js's World Map reads it from there (not
+# a hardcoded copy) to decide how many chapters it's willing to reveal.
+CONTENT_CEILING_LEVELS = 1300
 
 # Stage-finale modifier axes (levels 13-15 of every chapter). Seeded per
 # (mode, chapter, slot), independent of each other, so combinations don't

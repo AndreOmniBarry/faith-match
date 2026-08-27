@@ -70,9 +70,18 @@ function grantRandomItem(chapter){
 // climb gets harder, help arrives more often, not at a flat early-game
 // rate. chapter is 1-based; omit it for the old flat behavior.
 const GEMS_BY_STARS = { 0:0, 1:5, 2:10, 3:20 };
-function itemDropChance(chapter){
-  if(!chapter) return 0.15;
-  return Math.min(0.38, 0.15 + (chapter-1)*0.01);
+// Gating this behind stars>=2 was the bug: 2 stars requires 1.25x a level's
+// target, and the target itself is already calibrated to ~72% of a
+// simulated player's score — so 2 stars asks for roughly 90% of that
+// simulated benchmark, a high bar most real clears (usually 1-star) never
+// reach. That's why the bag could read completely empty through most of a
+// chapter. Every real clear (stars>=1) now gets a real, if smaller, shot;
+// a stronger clear is rewarded with better odds, not an on/off gate.
+function itemDropChance(stars, chapter){
+  if(stars < 1) return 0;
+  const base = chapter ? Math.min(0.38, 0.15 + (chapter-1)*0.01) : 0.15;
+  const starMultiplier = stars>=3 ? 1.3 : stars>=2 ? 1.0 : 0.6;
+  return Math.min(0.5, base*starMultiplier);
 }
 function rewardForLevel(stars, chapter){
   const gems = (GEMS_BY_STARS[stars] || 0) + (chapter ? Math.floor((chapter-1)/3) : 0);
@@ -82,7 +91,7 @@ function rewardForLevel(stars, chapter){
   // the inventory used to read as permanently empty for a long stretch of
   // early play: items previously only ever came from finishing an entire
   // 15-level chapter or the daily session.
-  if(stars>=2 && Math.random() < itemDropChance(chapter)) item = grantRandomItem(chapter);
+  if(stars>=1 && Math.random() < itemDropChance(stars, chapter)) item = grantRandomItem(chapter);
   return { gems, item };
 }
 function rewardForChapter(chapter){
