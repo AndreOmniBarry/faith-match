@@ -25,6 +25,12 @@
   --striped-glow:#ffffff;
   --wrapped-glow:#f4d78c;
   --colorbomb-glow:#c98bf0;
+  /* New chaos tiers (5-match flavors + the 6-match tier) — each needs a
+     glow distinct from every existing special AND every symbol hue above,
+     so a player can read what just triggered at a glance mid-cascade. */
+  --comet-glow:#ff9d4d;
+  --frostbloom-glow:#a8e6ff;
+  --halo-glow:#fff4d6;
   /* Set per-chapter by screens.js (js/theme.js) so stages read as visually
      distinct from one another, not a re-skin of the same seven screens. */
   --chapter-accent:var(--gold);

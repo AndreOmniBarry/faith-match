@@ -80,11 +80,34 @@ function seededShuffle(arr, rng){
 }
 
 // Difficulty curve — mirrors server/app/level_gen.py `_curve_shape` /
-// `_ease`. DIFFICULTY_EASE must match the server constant. Lower ease =
-// kinder (more bonus moves, fewer veils, lower score target); finale levels
-// use FINALE_EASE (>1.0, harder than neutral) instead.
-const DIFFICULTY_EASE = 0.90;
-const FINALE_EASE = 1.08;
+// `_ease` / `_chapter_ease`. CHAPTER_EASE_TABLE and the constants below it
+// must match the server's exactly (same values, same names) — this offline
+// fallback exists so a level feels the same whether or not the network is
+// up, per this file's header comment. Lower ease = kinder (more bonus
+// moves, fewer veils, lower score target); chapters 1-3 are a deliberately
+// gentle onboarding, later chapters step up in distinct bands rather than
+// one smooth continuous ramp. Finale levels (last CHAPTER_TAIL of a
+// chapter) add FINALE_EASE_BUMP on top of their own chapter's ease instead
+// of a flat global bump.
+const CHAPTER_EASE_TABLE = {
+  1:0.72, 2:0.72, 3:0.72,
+  4:0.85, 5:0.85, 6:0.85,
+  7:0.95, 8:0.95, 9:0.95,
+  10:1.05, 11:1.05, 12:1.05,
+  13:1.15, 14:1.15, 15:1.15,
+};
+const CHAPTER_EASE_TAIL_CHAPTER = 15;
+const CHAPTER_EASE_TAIL_VALUE = 1.15;
+const CHAPTER_EASE_TAIL_STEP = 0.015;
+const CHAPTER_EASE_CAP = 1.45;
+const FINALE_EASE_BUMP = 0.15;
+const MIN_MOVES_FLOOR = 10; // absolute floor, independent of ease — see level_gen.py's DAILY bug postmortem
+function chapterEase(chapter){
+  if(CHAPTER_EASE_TABLE[chapter] != null) return CHAPTER_EASE_TABLE[chapter];
+  if(chapter < 1) return CHAPTER_EASE_TABLE[1];
+  const extra = CHAPTER_EASE_TAIL_VALUE + CHAPTER_EASE_TAIL_STEP*(chapter - CHAPTER_EASE_TAIL_CHAPTER);
+  return Math.min(CHAPTER_EASE_CAP, extra);
+}
 const BREATHER_EVERY = 5;
 const CHAPTER_TAIL = 3; // last N levels of a chapter are the "finale"
 
@@ -110,7 +133,7 @@ function curveShape(index){
 function easeShape(shape, ease){
   return {
     ...shape,
-    moves: Math.round(shape.moves * (2 - ease)),
+    moves: Math.max(MIN_MOVES_FLOOR, Math.round(shape.moves * (2 - ease))),
     veilDensity: Math.round(shape.veilDensity * ease * 10000) / 10000,
   };
 }
@@ -141,7 +164,7 @@ function applyFinale(level, shape, mods, rng){
 
   if(mods.task==='timed') level.timedSeconds = 300;
 
-  if(mods.constraint==='tighterMoves') level.moves = Math.max(8, Math.round(level.moves*0.85));
+  if(mods.constraint==='tighterMoves') level.moves = Math.max(MIN_MOVES_FLOOR, Math.round(level.moves*0.85));
   else if(mods.constraint==='hazardTile'){
     const extra = veilCellsFor(shape, rng, 0.08);
     level.veil = { cells: (level.veil?.cells||[]).concat(extra) };
@@ -152,7 +175,8 @@ function applyFinale(level, shape, mods, rng){
 function localFallbackLevel(mode, index){
   const slotInChapter = index % CHAPTER_SIZE;
   const isFinale = slotInChapter >= CHAPTER_SIZE - CHAPTER_TAIL;
-  const ease = isFinale ? FINALE_EASE : DIFFICULTY_EASE;
+  const chapter = Math.floor(index/CHAPTER_SIZE) + 1;
+  const ease = Math.min(CHAPTER_EASE_CAP, chapterEase(chapter) + (isFinale ? FINALE_EASE_BUMP : 0));
   const rawShape = curveShape(index);
   const shape = easeShape(rawShape, ease);
   const rng = mulberry32(hashSeed(`faithmatch::${mode}::${index}`));
@@ -240,22 +264,50 @@ async function getChapter(mode, chapterNum){
 // Daily Blessing is one challenge, once a day — carpe diem, not a session
 // to grind through. (Was a 3-level session; reverted per direction.)
 const DAILY_SESSION_LENGTH = 1;
-function todaySeedIndex(){
-  const d = new Date();
-  const iso = d.toISOString().slice(0,10);
-  return hashSeed(`faithmatch::daily::${iso}`) % 20000;
+
+// Mirrors server/app/level_gen.py get_daily_level() — Daily gets its own
+// fixed, tuned difficulty band, deliberately *not* derived from the global
+// tier curve. The old approach hashed the date into an arbitrary index
+// across a 20000-level span, and curveShape()'s hardest values saturate by
+// index~250 — so the overwhelming majority of dates rolled max-tier
+// difficulty (confirmed directly: one date produced a 9x9/8-color board
+// with an 11-move budget after the old -3 penalty on top). The date-hash
+// now only picks *flavor* (name + small jitter on colors/moves), the shape
+// itself stays inside a moderate, always-approachable band.
+const DAILY_EASE = 0.85;
+const DAILY_ROWS = 8, DAILY_COLS = 8;
+const DAILY_COLORS_CHOICES = [5,6,6,6,7];
+const DAILY_MOVES_CHOICES = [18,19,20,20,20,21,22];
+function dailyFallbackLevel(dateISO){
+  const rng = mulberry32(hashSeed(`faithmatch::daily::${dateISO}`));
+  const pick = (arr)=>arr[Math.floor(rng()*arr.length)];
+  const rawShape = { rows:DAILY_ROWS, cols:DAILY_COLS, colors:pick(DAILY_COLORS_CHOICES), moves:pick(DAILY_MOVES_CHOICES), veilDensity:0 };
+  const shape = easeShape(rawShape, DAILY_EASE);
+  // Same offline target approximation as localFallbackLevel — see its
+  // comment: no simulated playouts client-side, so approximate the shape
+  // the server would calibrate to, from board size/move budget directly.
+  const cellBudget = shape.rows*shape.cols*shape.colors;
+  const rawTarget = 60*shape.moves + cellBudget*9;
+  const target = Math.max(200, Math.round(rawTarget * 0.72 * DAILY_EASE / 10) * 10);
+  const names = ['A Gentle Start','Rising Faith','Steady Hands','Widening Path','Deeper Waters',
+    "Refiner's Fire",'Mountain Climb','Radiant Crown','Quiet Trust','Open Doors','Living Water','New Mercies'];
+  return {
+    mode:'daily-blessing', index:0, name: names[Math.floor(rng()*names.length)],
+    rows: shape.rows, cols: shape.cols, colors: shape.colors, moves: shape.moves,
+    objective:'score', target, collect:null, veil:null,
+    difficultyRating: Math.min(1, 0.35*(shape.rows*shape.cols)/81 + 0.30*shape.colors/SYMBOLS.length + 0.35*(1-Math.min(1,shape.moves/24))),
+    offline: true,
+  };
 }
 
 async function getDaily(){
   try{
     return await fetchDaily();
   }catch(e){
-    const baseIdx = todaySeedIndex();
     const today = new Date().toISOString().slice(0,10);
     const levels = [];
     for(let i=0;i<DAILY_SESSION_LENGTH;i++){
-      const level = localFallbackLevel('daily-blessing', baseIdx+i);
-      level.moves = Math.max(10, level.moves - 3);
+      const level = dailyFallbackLevel(today);
       level.bonusMultiplier = Math.max(level.bonusMultiplier||1, 1.5);
       level.date = today;
       level.dailySlot = i;

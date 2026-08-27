@@ -27,9 +27,32 @@ from typing import Optional
 # Tunables
 # ---------------------------------------------------------------------------
 
-# "Familiar match-3 difficulty, ~10% kinder" — a single knob.
-# >1.0 = more forgiving (more moves, lower targets). Tune here, not per-level.
-DIFFICULTY_EASE = 0.90
+# Per-chapter ease table — chapters 1-3 are a deliberately gentle
+# onboarding, then the climb becomes a real one. Replaces a single flat
+# constant so a chapter has its own difficulty identity, not just a smooth
+# continuous ramp with no distinct steps. Lower ease = kinder (more moves,
+# lower veil density/score target relative to _ease()'s formula); >1.0 sits
+# on the harder-than-neutral side. Values are indexed by chapter (1-based);
+# `_chapter_ease()` extrapolates past the table's tail for chapter 16+.
+CHAPTER_EASE_TABLE = {
+    1: 0.72, 2: 0.72, 3: 0.72,
+    4: 0.85, 5: 0.85, 6: 0.85,
+    7: 0.95, 8: 0.95, 9: 0.95,
+    10: 1.05, 11: 1.05, 12: 1.05,
+    13: 1.15, 14: 1.15, 15: 1.15,
+}
+CHAPTER_EASE_TAIL_CHAPTER = 15       # last chapter explicitly in the table
+CHAPTER_EASE_TAIL_VALUE = 1.15       # its ease value, extrapolation's base
+CHAPTER_EASE_TAIL_STEP = 0.015       # per-chapter increase beyond the table
+CHAPTER_EASE_CAP = 1.45              # hard ceiling — never harder than this
+FINALE_EASE_BUMP = 0.15              # finale levels: chapter ease + this, same cap
+MIN_MOVES_FLOOR = 10                 # absolute floor, independent of ease —
+                                      # the lesson from the Daily Blessing bug:
+                                      # no tier should ever be able to produce
+                                      # a near-unwinnable move budget.
+
+# Backward-compatible aliases some call sites still reference directly.
+DIFFICULTY_EASE = CHAPTER_EASE_TABLE[1]
 
 SYMBOL_COUNT = 8          # total distinct faith-symbol types available client-side
 CHAPTER_SIZE = 15         # levels per chapter, mirrors the client's level-select grouping
@@ -94,13 +117,29 @@ def _curve_shape(index: int) -> dict:
     return {"rows": rows, "cols": cols, "colors": colors, "moves": moves, "veil_density": veil_density}
 
 
+def _chapter_ease(chapter: int) -> float:
+    """Ease for a given chapter (1-based) — see CHAPTER_EASE_TABLE's comment.
+    Chapters 1-15 read straight from the table; beyond that, extrapolate a
+    slow, capped climb rather than holding flat or leaving it undefined,
+    since content is meant to keep growing past the table's tail."""
+    if chapter in CHAPTER_EASE_TABLE:
+        return CHAPTER_EASE_TABLE[chapter]
+    if chapter < 1:
+        return CHAPTER_EASE_TABLE[1]
+    extra = CHAPTER_EASE_TAIL_VALUE + CHAPTER_EASE_TAIL_STEP * (chapter - CHAPTER_EASE_TAIL_CHAPTER)
+    return min(CHAPTER_EASE_CAP, extra)
+
+
 def _ease(shape: dict, ease: float) -> dict:
     """Lower `ease` = kinder (more bonus moves, fewer veils, lower score
     target relative to what a simulated player achieves). ease=1.0 is
-    "no adjustment" baseline; finale levels intentionally use ease>1 to be
-    genuinely harder, not just differently flavored — see FINALE_EASE."""
+    "no adjustment" baseline; finale levels intentionally use a higher ease
+    (chapter ease + FINALE_EASE_BUMP) to be genuinely harder, not just
+    differently flavored. `moves` is floored at MIN_MOVES_FLOOR regardless of
+    how high `ease` climbs — no chapter tier should ever be able to produce
+    the kind of near-unwinnable move budget the Daily Blessing bug did."""
     eased = dict(shape)
-    eased["moves"] = round(shape["moves"] * (2 - ease))
+    eased["moves"] = max(MIN_MOVES_FLOOR, round(shape["moves"] * (2 - ease)))
     eased["veil_density"] = round(shape["veil_density"] * ease, 4)
     return eased
 
@@ -408,7 +447,7 @@ def _apply_finale(data: dict, shape: dict, mods: dict, rng: random.Random) -> No
         data["timedSeconds"] = 300  # 5:00 countdown; Freeze item pauses it 60s
 
     if mods["constraint"] == "tighterMoves":
-        data["moves"] = max(8, round(data["moves"] * 0.85))
+        data["moves"] = max(MIN_MOVES_FLOOR, round(data["moves"] * 0.85))
     elif mods["constraint"] == "hazardTile":
         extra = _place_veils(rng, shape["rows"], shape["cols"], 0.08)
         existing = data["veil"]["cells"] if data.get("veil") else []
@@ -434,12 +473,12 @@ def _chapter_gate(mode: str, chapter: int) -> Optional[dict]:
     return {"position": position, "starsRequired": threshold}
 
 
-# Finale levels (13-15 of every chapter) run a genuine harder spike, not
-# just a modifier flourish — less generous than the standard 0.90 baseline
-# (which is < 1.0, i.e. kinder-than-neutral). 1.08 sits on the *harder*
-# side of neutral: fewer bonus moves, more veils, a higher score bar,
-# since their bigger rewards should be earned. See _apply_finale.
-FINALE_EASE = 1.08
+# Finale levels (13-15 of every chapter) run a genuine harder spike relative
+# to *their own chapter's* baseline, not a flat global bump — see
+# FINALE_EASE_BUMP in the CHAPTER_EASE_TABLE block above and _chapter_ease().
+# Kept as a module-level alias (chapter-1 finale value) for any external code
+# that still imports FINALE_EASE directly.
+FINALE_EASE = min(CHAPTER_EASE_CAP, CHAPTER_EASE_TABLE[1] + FINALE_EASE_BUMP)
 
 
 @lru_cache(maxsize=4096)
@@ -450,7 +489,9 @@ def get_level(mode: str, index: int) -> dict:
 
     slot_in_chapter = index % CHAPTER_SIZE
     is_finale = slot_in_chapter >= CHAPTER_SIZE - 3
-    ease = FINALE_EASE if is_finale else DIFFICULTY_EASE
+    chapter = index // CHAPTER_SIZE + 1
+    ease = _chapter_ease(chapter) + (FINALE_EASE_BUMP if is_finale else 0.0)
+    ease = min(CHAPTER_EASE_CAP, ease)
     shape = _ease(_curve_shape(index), ease)
 
     target, median = _calibrate_target(shape, rng, ease)
@@ -492,3 +533,64 @@ def get_chapter(mode: str, chapter: int) -> dict:
     start = (chapter - 1) * CHAPTER_SIZE
     levels = [get_level(mode, start + i) for i in range(CHAPTER_SIZE)]
     return {"levels": levels, "gate": _chapter_gate(mode, chapter)}
+
+
+# ---------------------------------------------------------------------------
+# Daily Blessing — its own fixed difficulty band, deliberately *not* derived
+# from the global tier curve.
+#
+# get_level() ties board size/colors/moves to a level *index*, and Daily
+# used to just feed it a date-hashed index uniformly spread across 0-19999.
+# That's the bug: _curve_shape()'s hardest values (9x9 board, 8 colors,
+# minimum move ramp) already saturate by index~250, so >98% of possible
+# dates rolled max-tier difficulty — confirmed by generating an actual date's
+# level: a 9x9/8-color board with an 11-move budget after the old -3 penalty.
+# Nobody should have to be at endgame skill to clear today's Daily.
+#
+# Fix: keep the date-hash for *flavor* only (which name, small jitter on
+# colors/moves) and pin the shape itself to a tuned, moderate band —
+# reusing the same Monte Carlo calibration every other level gets, so the
+# score target is still simulated, not hand-guessed.
+# ---------------------------------------------------------------------------
+
+DAILY_EASE = 0.85          # roughly chapters 4-6 friendliness — approachable
+                            # any day, not gated by a player's own progress
+DAILY_ROWS = DAILY_COLS = 8
+DAILY_COLORS_CHOICES = (5, 6, 6, 6, 7)   # weighted toward 6 — the jitter is
+DAILY_MOVES_CHOICES = (18, 19, 20, 20, 20, 21, 22)  # flavor, not a difficulty swing
+
+
+@lru_cache(maxsize=512)
+def get_daily_level(date_iso: str) -> dict:
+    # hashlib, not Python's built-in hash() — the latter is randomized per
+    # process (PYTHONHASHSEED), which would break "every client gets the
+    # same daily challenge" across server restarts. Same sha256 pattern
+    # _seed() uses for every other level.
+    h = hashlib.sha256(f"faithmatch::daily::{date_iso}".encode()).digest()
+    seed = int.from_bytes(h[:8], "big") & 0x7FFFFFFFFFFFFFFF
+    rng = random.Random(seed)
+    shape = {
+        "rows": DAILY_ROWS,
+        "cols": DAILY_COLS,
+        "colors": rng.choice(DAILY_COLORS_CHOICES),
+        "moves": rng.choice(DAILY_MOVES_CHOICES),
+        "veil_density": 0.0,  # daily-blessing's objective is always 'score'
+    }
+    shape = _ease(shape, DAILY_EASE)
+    target, median = _calibrate_target(shape, rng, DAILY_EASE)
+    name = STORY_NAMES[rng.randrange(len(STORY_NAMES))]
+
+    cfg = LevelConfig(
+        mode="daily-blessing",
+        index=0,  # unused for daily — see js/screens.js, theming is skipped for this mode
+        name=name,
+        rows=shape["rows"],
+        cols=shape["cols"],
+        colors=shape["colors"],
+        moves=shape["moves"],
+        objective="score",
+        target=target,
+        difficulty_rating=_difficulty_rating(shape),
+        calibration={"simPlayouts": SIM_PLAYOUTS, "simMedianScore": median, "difficultyEase": DAILY_EASE},
+    )
+    return cfg.as_dict()

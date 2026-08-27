@@ -126,6 +126,25 @@ async function buildAllTextures(){
   cb.addChild(cg);
   try{ baseTextures.set('colorbomb', app.renderer.generateTexture(cb)); }catch(e){}
   cb.destroy({ children:true });
+
+  // Halo Bomb — the 6-match tier, deliberately the single most premium tile
+  // face in the game. A radiant sunburst rather than colorbomb's swirl, so
+  // the rarest, most rewarding piece is instantly recognizable even before
+  // its glow ring kicks in.
+  const ha = new PIXI.Container();
+  const hg = new PIXI.Graphics();
+  const haloBase = hexOf('var(--halo-glow)');
+  hg.circle(64,64,62).fill({ color: mixHex(0xffffff, haloBase, 0.55) });
+  for(let i=0;i<10;i++){
+    const ang = (Math.PI*2*i)/10;
+    const x1 = 64+Math.cos(ang)*20, y1 = 64+Math.sin(ang)*20;
+    const x2 = 64+Math.cos(ang)*60, y2 = 64+Math.sin(ang)*60;
+    hg.moveTo(x1,y1).lineTo(x2,y2).stroke({ width:5, color:0xffffff, alpha:0.5 });
+  }
+  hg.circle(64,64,26).fill({ color:0xffffff, alpha:0.75 });
+  ha.addChild(hg);
+  try{ baseTextures.set('halo', app.renderer.generateTexture(ha)); }catch(e){}
+  ha.destroy({ children:true });
 }
 
 /* ============================= BOARD SIZING ============================= */
@@ -232,6 +251,9 @@ function specialGlowColor(kind){
   if(kind==='striped') return 0xffffff;
   if(kind==='wrapped') return hexOf('var(--wrapped-glow)');
   if(kind==='colorbomb') return hexOf('var(--colorbomb-glow)');
+  if(kind==='comet') return hexOf('var(--comet-glow)');
+  if(kind==='frostbloom') return hexOf('var(--frostbloom-glow)');
+  if(kind==='halo') return hexOf('var(--halo-glow)');
   return null;
 }
 
@@ -266,9 +288,12 @@ class TileHandle{
   }
   updateVisual(){
     const tile = this.tile;
-    const tex = tile.special && tile.special.kind==='colorbomb'
-      ? baseTextures.get('colorbomb')
-      : baseTextures.get(tile.type);
+    // Color Bomb and Halo Bomb get their own dedicated base texture (a
+    // premium tile face replacing the gem base entirely); Comet/Frostbloom
+    // keep the matched symbol's own face and rely on their glow ring to
+    // read as special — they're "this symbol, empowered," not a new object.
+    const specialTexKey = tile.special && (tile.special.kind==='colorbomb' || tile.special.kind==='halo') ? tile.special.kind : null;
+    const tex = specialTexKey ? baseTextures.get(specialTexKey) : baseTextures.get(tile.type);
     if(tex) this.sprite.texture = tex;
     this.setSize(tileSize*0.94);
 
