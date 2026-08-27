@@ -14,16 +14,20 @@ MAX_POINTS_PER_MOVE = 480
 MIN_MS_PER_MOVE = 160  # a human can't legally register a swap much faster than this
 
 
-def stars_for(score: int, target: int) -> int:
-    if target <= 0:
+def stars_for(score: int, target: int, moves_left: int = 0, total_moves: int = 0) -> int:
+    """Mirrors js/engine.js's starsFor() exactly — see its comment. Score
+    overshoot used to be the only input; a level won efficiently (finished
+    early with moves still banked) now rates exactly as well as one where
+    score was ground out past the target move by move."""
+    if target <= 0 or score < target:
         return 0
-    if score >= target * 1.6:
+    score_ratio = score / target
+    efficiency = max(0, moves_left) / total_moves if total_moves > 0 else 0
+    if score_ratio >= 1.5 or efficiency >= 0.4:
         return 3
-    if score >= target * 1.25:
+    if score_ratio >= 1.15 or efficiency >= 0.15:
         return 2
-    if score >= target:
-        return 1
-    return 0
+    return 1
 
 
 def validate_score(score: int, moves_used: int, duration_ms: int | None) -> dict:

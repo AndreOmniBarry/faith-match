@@ -1077,7 +1077,7 @@ function isChapterComplete(level, stars){
 
 function onLevelWin(s){
   stopIdleLoop(); stopTimer(); audio.stopAmbientPad();
-  const stars = engine.starsFor(s.score, currentLevel.target || 1);
+  const stars = engine.starsFor(s.score, currentLevel.target || 1, s.movesLeft, currentLevel.moves);
   let rewardLines = [];
 
   if(currentLevel.mode==='daily-blessing'){

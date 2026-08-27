@@ -115,7 +115,8 @@ def submit_score(payload: ScoreSubmission) -> dict:
         return {"accepted": False, "reasons": verdict["reasons"], "stars": 0}
 
     lvl = get_level(payload.mode, payload.levelIndex)
-    stars = stars_for(payload.score, lvl["target"])
+    moves_left = max(0, lvl["moves"] - payload.movesUsed)
+    stars = stars_for(payload.score, lvl["target"], moves_left, lvl["moves"])
     db.record_score(payload.mode, payload.levelIndex, payload.player, payload.score, stars)
     return {"accepted": True, "stars": stars, "target": lvl["target"]}
 

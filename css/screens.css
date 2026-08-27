@@ -82,6 +82,16 @@
 }
 .splash-motif .sm-swatch svg{ width:15px; height:15px; color:var(--cream); }
 @keyframes motifFloat{ 0%,100%{ transform:translateY(0); } 50%{ transform:translateY(-5px); } }
+
+/* Publisher mark — small and quiet on purpose: sits in the safe strip
+   below the motif row, never competes with Begin/Sound or the verse text
+   above it, and pointer-events:none so it can never eat a tap meant for
+   something behind it. */
+.brand-publisher{
+  position:absolute; z-index:1; bottom:12px; left:0; right:0;
+  font-size:10px; letter-spacing:.09em; text-transform:uppercase;
+  color:#8478ab; opacity:.55; pointer-events:none;
+}
 @media (prefers-reduced-motion: reduce){
   .emblem-ring, .brand-emblem, .splash-motif .sm-swatch{ animation:none; }
   /* The WASM particle sim itself checks prefers-reduced-motion in
