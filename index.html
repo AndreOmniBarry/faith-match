@@ -62,11 +62,21 @@
 
   <!-- MODE SELECT -->
   <section class="screen hidden" id="screen-modes">
-    <button class="status-bar" id="btn-dashboard">
-      <span class="status-chip">❤️ <span id="status-lives">5</span></span>
-      <span class="status-chip">💎 <span id="status-gems">0</span></span>
-      <span class="status-chip">🔥 <span id="status-streak">0</span></span>
-    </button>
+    <div class="status-row">
+      <button class="status-bar" id="btn-dashboard">
+        <span class="status-chip">❤️ <span id="status-lives">5</span></span>
+        <span class="status-chip">💎 <span id="status-gems">0</span></span>
+        <span class="status-chip">🔥 <span id="status-streak">0</span></span>
+      </button>
+      <!-- Sign-in used to live only inside the Dashboard screen (a
+           secondary screen most players never opened) — this is the same
+           account.js panel, just reachable from the very first screen a
+           player sees after splash, so it's never something you have to
+           go looking for. -->
+      <button class="profile-chip" id="btn-profile-shortcut" title="Player Profile — sign in to save your progress" aria-label="Player Profile">
+        <span id="profile-chip-icon">👤</span>
+      </button>
+    </div>
     <div class="modes-header">
       <h2>Choose Your Path</h2>
       <p>Every mode plays differently — pick where your faith walks today.</p>
@@ -78,8 +88,9 @@
   <section class="screen hidden" id="screen-dashboard">
     <div class="back-row"><button class="icon-btn" id="btn-back-dashboard">←</button><span class="crumb">Modes</span></div>
     <div class="lvl-header"><h2>Your Journey</h2><p>Lives, gems, streak, and what you've earned.</p></div>
-    <div class="dash-grid" id="dash-grid"></div>
-    <div class="dash-section-title">Player Profile</div>
+    <!-- Player Profile leads, not trails — it's the one row on this whole
+         screen that determines whether everything else here survives a
+         lost phone. -->
     <button class="dash-account-row" id="btn-open-account">
       <span class="dar-icon">👤</span>
       <span class="dar-body">
@@ -88,6 +99,7 @@
       </span>
       <span class="dar-chevron">›</span>
     </button>
+    <div class="dash-grid" id="dash-grid"></div>
     <div class="dash-section-title">Inventory</div>
     <div class="dash-inventory" id="dash-inventory"></div>
     <div class="dash-section-title">Stars Earned</div>

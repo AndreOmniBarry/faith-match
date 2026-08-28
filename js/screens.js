@@ -215,15 +215,26 @@ function stopDashboardClock(){ if(dashClockInterval){ clearInterval(dashClockInt
 
 function refreshAccountRow(){
   const row = $('btn-open-account'), title = $('dash-account-title'), sub = $('dash-account-sub');
-  if(!row) return;
-  if(account.isLoggedIn()){
-    title.textContent = `Signed in as ${account.getUsername()}`;
-    sub.textContent = 'Tap to manage your profile';
-    row.classList.add('signed-in');
-  }else{
-    title.textContent = 'Guest — progress stays on this device';
-    sub.textContent = 'Sign in to carry progress to your phone or a new device';
-    row.classList.remove('signed-in');
+  const chip = $('btn-profile-shortcut');
+  const signedIn = account.isLoggedIn();
+  if(row){
+    if(signedIn){
+      title.textContent = `Signed in as ${account.getUsername()}`;
+      sub.textContent = 'Tap to manage your profile';
+      row.classList.add('signed-in');
+    }else{
+      title.textContent = 'Guest — progress stays on this device';
+      sub.textContent = 'Sign in to carry progress to your phone or a new device';
+      row.classList.remove('signed-in');
+    }
+  }
+  // The status-bar shortcut chip (visible on the Modes screen — the very
+  // first thing a player sees, not buried inside the Dashboard) mirrors
+  // the same signed-in/guest state: a gold dot while signed out, gone once
+  // signed in, so it reads as "there's something to do here" until it is.
+  if(chip){
+    chip.classList.toggle('signed-in', signedIn);
+    chip.classList.toggle('guest', !signedIn);
   }
 }
 
@@ -1264,6 +1275,7 @@ function initNav(){
   $('btn-tray-close').addEventListener('click', ()=>{ audio.playUiTap(); closeTray(); });
   $('btn-combo-meter').addEventListener('click', ()=>{ engine.popComboMeter(); });
   $('btn-open-account').addEventListener('click', ()=>{ audio.playUiTap(); openAccountPanel(); });
+  $('btn-profile-shortcut').addEventListener('click', (e)=>{ e.stopPropagation(); audio.playUiTap(); openAccountPanel(); });
   $('btn-account-close').addEventListener('click', ()=>{ audio.playUiTap(); closeAccountPanel(); });
   $('btn-account-login').addEventListener('click', handleAccountLogin);
   $('btn-account-register').addEventListener('click', handleAccountRegister);
@@ -1291,6 +1303,7 @@ async function initScreens(){
   theme.resetTheme();
   initSplash();
   initNav();
+  refreshAccountRow(); // so the Modes-screen profile chip's guest/signed-in dot is correct from the very first screen, not just after a Dashboard visit
   showScreen('splash');
   // Background — never blocks first paint. If this device was signed in
   // before, this is what actually pulls progress back down (or prompts,

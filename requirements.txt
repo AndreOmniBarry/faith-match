@@ -1,0 +1,5 @@
+# Dependencies for api/index.py, Vercel's Python serverless function.
+# (server/requirements.txt is the fuller local-dev list, incl. uvicorn —
+# not needed here since Vercel invokes the ASGI `app` object directly.)
+fastapi>=0.110
+pydantic>=2.6
