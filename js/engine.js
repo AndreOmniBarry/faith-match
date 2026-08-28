@@ -922,10 +922,33 @@ function setPointerHandler(fn){ onTilePointerDown = fn; }
 async function attemptSwap(a,b){
   if(busy) return;
   if(!isSwappable(a.r,a.c) || !isSwappable(b.r,b.c)){
+    // A real drag lifts the tile and follows the pointer live (see
+    // render.beginTileDrag/updateTileDrag) *before* this function ever
+    // runs — screens.js's onBoardPointerUp calls attemptSwap and trusts
+    // it to "take over" the tile's position, which every other branch
+    // below does via setTileTransform(). This branch never did: it added
+    // a shake class and stopped, leaving the tile's actual pixel position
+    // wherever the drag left it — offset from its real cell, with no
+    // drag-base ever cleared. That's what read as a veiled tile "just
+    // suspended" with no recoil.
+    //
+    // snapTileHome() (not setTileTransform()) on purpose, and called
+    // *before* the shake: TileHandle.playShake() reads the container's
+    // current position synchronously as the point to wiggle around and
+    // return to, and never cancels a competing tween itself — pair it with
+    // setTileTransform()'s 280ms tween (which hasn't moved anywhere yet at
+    // the instant shake reads it) and shake captures the stale, still-
+    // dragged position, then outlasts and overwrites that tween, freezing
+    // the tile right back where the drag left it. Placing it home *first*,
+    // instantly, means shake starts from — and correctly returns to — the
+    // real cell.
     const idA = grid[a.r][a.c], idB = grid[b.r][b.c];
     [idA,idB].forEach(id=>{
       const t = id!=null && tilesById.get(id);
-      if(t && t.el){ t.el.classList.add('shake'); setTimeout(()=>t.el && t.el.classList.remove('shake'),300); }
+      if(t && t.el){
+        render.snapTileHome(t.el, t.r, t.c);
+        t.el.classList.add('shake'); setTimeout(()=>t.el && t.el.classList.remove('shake'),300);
+      }
     });
     audio.playSwapFail();
     callbacks.onToast && callbacks.onToast('That one is still veiled — free it from beside.');
@@ -979,9 +1002,17 @@ async function attemptSwap(a,b){
     audio.playSwapFail();
     grid[a.r][a.c] = idA; grid[b.r][b.c] = idB;
     tA.r=a.r; tA.c=a.c; tB.r=b.r; tB.c=b.c;
+    // snapTileHome() before the shake, not setTileTransform() after it —
+    // see its own comment (and attemptSwap's veiled-rejection branch
+    // above, same fix): shake reads the container's position synchronously
+    // the instant it's triggered, so the tile has to already be home by
+    // then, or shake either captures the wrong (mid-swap) spot, or (the
+    // order this used to be in) gets its own barely-started tween
+    // cancelled outright by setTileTransform() running after it — either
+    // way landing somewhere other than a real, visible reject-and-recoil.
+    render.snapTileHome(tA.el, tA.r, tA.c);
+    render.snapTileHome(tB.el, tB.r, tB.c);
     tA.el.classList.add('shake'); tB.el.classList.add('shake');
-    render.setTileTransform(tA.el, tA.r, tA.c);
-    render.setTileTransform(tB.el, tB.r, tB.c);
     await sleep(SWAP_MS);
     tA.el.classList.remove('shake'); tB.el.classList.remove('shake');
     busy = false;
