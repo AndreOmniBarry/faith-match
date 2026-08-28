@@ -1,0 +1,8 @@
+# Only matters for a local `vercel deploy` (uploads the working directory
+# as-is, unlike a GitHub import which only ever sees committed files).
+server/.venv/
+server/__pycache__/
+server/**/__pycache__/
+server/data.db
+*.pyc
+.DS_Store

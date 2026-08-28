@@ -147,8 +147,9 @@
 .mode-card.done-today{opacity:.7;}
 .mode-card .mode-streak{color:var(--gold); font-weight:700;}
 
+.status-row{ display:flex; align-items:center; gap:8px; width:100%; margin-bottom:6px; }
 .status-bar{
-  display:flex; gap:10px; width:100%; justify-content:center; margin-bottom:6px;
+  display:flex; gap:10px; flex:1; justify-content:center;
   background:none; padding:0;
 }
 .status-chip{
@@ -156,6 +157,19 @@
   background:rgba(255,255,255,.06); border:1px solid var(--line);
   border-radius:20px; padding:6px 12px; font-size:13px; color:var(--cream);
 }
+/* Sign-in, visible on the very first screen — a small dot marks "not
+   signed in yet" the same way a notification badge would, so it reads as
+   something to act on rather than a static profile icon. */
+.profile-chip{
+  position:relative; flex:none; width:34px; height:34px; border-radius:50%;
+  display:flex; align-items:center; justify-content:center; font-size:15px;
+  background:rgba(255,255,255,.06); border:1px solid var(--line); color:var(--cream);
+}
+.profile-chip.guest::after{
+  content:''; position:absolute; top:-1px; right:-1px; width:9px; height:9px;
+  border-radius:50%; background:var(--gold); border:2px solid var(--bg-0);
+}
+.profile-chip.signed-in{ border-color:var(--gold-soft); color:var(--gold-soft); }
 
 /* ---------- DASHBOARD ---------- */
 .dash-grid{
@@ -175,6 +189,12 @@
   width:100%; display:flex; align-items:center; gap:12px; text-align:left;
   background:linear-gradient(160deg, var(--bg-2), var(--bg-1));
   border:1px solid var(--line); border-radius:16px; padding:12px 14px;
+  margin-bottom:18px;
+}
+/* Signed-out is the state that actually needs attention here — a gold
+   border/glow reads as "do this", not just another stats card in the list. */
+.dash-account-row:not(.signed-in){
+  border-color:var(--gold); box-shadow:0 0 0 1px color-mix(in srgb, var(--gold) 35%, transparent), 0 0 16px color-mix(in srgb, var(--gold) 20%, transparent);
 }
 .dash-account-row .dar-icon{font-size:22px;}
 .dash-account-row .dar-body{flex:1; min-width:0;}
