@@ -427,21 +427,34 @@ def _finale_modifiers(mode: str, chapter: int, slot: int) -> dict:
     }
 
 
-def _apply_finale(data: dict, shape: dict, mods: dict, rng: random.Random) -> None:
+def _apply_finale(data: dict, shape: dict, mods: dict, rng: random.Random, objective: str) -> None:
     """Mutates a level dict in place with a finale's modifier axes. Reuses
     existing mechanics (veils, bonus multiplier, timed countdown) rather than
-    inventing new match rules, so the core engine doesn't have to change."""
+    inventing new match rules, so the core engine doesn't have to change.
+
+    The two veil-adding axes (lockedChain, hazardTile) are gated to
+    objective=='veil' (Refiner's Fire) only — they used to fire on *any*
+    mode's finale. A Grace Path/Harvest/Daily Blessing finale would then
+    get veiled tiles dropped onto its board with no veil-progress UI (that
+    only renders for the 'veil' objective) and no explanation, so a player
+    would just hit unexplained "that one is still veiled" rejections on
+    random tiles — a real, reported bug, not a design choice. Every other
+    mode substitutes an equally-punchy, mode-agnostic axis instead of
+    silently doing nothing on that finale slot."""
     data["finalePiece"] = mods["piece"]
     data["skin"] = mods["skin"]
     data["finale"] = True
 
-    if mods["piece"] == "lockedChain":
+    piece = mods["piece"]
+    if piece == "lockedChain" and objective != "veil":
+        piece = "doublePoints"
+    if piece == "lockedChain":
         extra = _place_veils(rng, shape["rows"], shape["cols"], 0.10)
         existing = data["veil"]["cells"] if data.get("veil") else []
         data["veil"] = {"cells": existing + extra}
-    elif mods["piece"] == "doublePoints":
+    elif piece == "doublePoints":
         data["bonusMultiplier"] = 2.0
-    elif mods["piece"] == "shrinking":
+    elif piece == "shrinking":
         cells = [(r, c) for r in range(shape["rows"]) for c in range(shape["cols"])]
         rng.shuffle(cells)
         data["shrinkCells"] = [list(rc) for rc in cells[:4]]
@@ -449,15 +462,18 @@ def _apply_finale(data: dict, shape: dict, mods: dict, rng: random.Random) -> No
     if mods["task"] == "timed":
         data["timedSeconds"] = 300  # 5:00 countdown; Freeze item pauses it 60s
 
-    if mods["constraint"] == "tighterMoves":
+    constraint = mods["constraint"]
+    if constraint == "hazardTile" and objective != "veil":
+        constraint = "moreColors"
+    if constraint == "tighterMoves":
         data["moves"] = max(MIN_MOVES_FLOOR, round(data["moves"] * 0.85))
-    elif mods["constraint"] == "hazardTile":
+    elif constraint == "hazardTile":
         extra = _place_veils(rng, shape["rows"], shape["cols"], 0.08)
         existing = data["veil"]["cells"] if data.get("veil") else []
         data["veil"] = {"cells": existing + extra}
-    elif mods["constraint"] == "raisedTarget":
+    elif constraint == "raisedTarget":
         data["target"] = round(data["target"] * 1.4)
-    elif mods["constraint"] == "moreColors":
+    elif constraint == "moreColors":
         data["colors"] = min(SYMBOL_COUNT, data["colors"] + 1)
     # "noEasing" is intentionally a no-op marker here — the harder base
     # target/moves for finales already comes from FINALE_EASE below.
@@ -527,7 +543,7 @@ def get_level(mode: str, index: int) -> dict:
         chapter = index // CHAPTER_SIZE + 1
         slot = slot_in_chapter - (CHAPTER_SIZE - 3)
         mods = _finale_modifiers(mode, chapter, slot)
-        _apply_finale(data, shape, mods, rng)
+        _apply_finale(data, shape, mods, rng, objective)
     return data
 
 

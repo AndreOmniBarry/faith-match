@@ -185,10 +185,22 @@ function pulseAmbient(duration){
 }
 
 /* ---------- combo popup / confetti (DOM, unchanged) ---------- */
-const COMBO_WORDS = ['Blessed!','Grace!','Hallelujah!','Faithful!','Radiant!','Wondrous!','Glory!','Anointed!'];
+// Three tiers instead of one word per exact combo length — a fixed 1:1
+// mapping meant a 4-combo always said the exact same word, every single
+// time, for the whole game. Picking randomly within the tier for that
+// combo size keeps it feeling alive instead of repetitive, and includes
+// the phrase-style compliments (not just single-word exclamations)
+// requested directly by pilot feedback.
+const COMBO_WORDS_SMALL  = ['Blessed!','Grace!','Faithful!','Renewed Hope!'];
+const COMBO_WORDS_MEDIUM = ['Hallelujah!','Radiant!','Breaking Through!','Excellent!'];
+const COMBO_WORDS_LARGE  = ['Wondrous!','Glory!','Anointed!','Faith Restored!'];
+function comboWordFor(n){
+  const pool = n>=6 ? COMBO_WORDS_LARGE : n>=4 ? COMBO_WORDS_MEDIUM : COMBO_WORDS_SMALL;
+  return pool[Math.floor(Math.random()*pool.length)];
+}
 function comboPopup(n){
   if(!comboPopupEl) return;
-  const word = COMBO_WORDS[Math.min(n-2, COMBO_WORDS.length-1)];
+  const word = comboWordFor(n);
   comboPopupEl.textContent = `${word} x${n}`;
   comboPopupEl.classList.remove('show');
   void comboPopupEl.offsetWidth;
@@ -227,19 +239,71 @@ function idleShimmer(tileEls){
     }, 60);
   }
 }
-function hintSparkle(handleA, handleB){
+// Was a barely-there 8%-scale pulse on the two tiles and nothing else —
+// easy to miss entirely, and even if you caught it, it didn't say which
+// way to swap. Now: a stronger pulse on both tiles, a gold glow ring
+// around each one ("these two"), and a nudging double-chevron arrow
+// riding back and forth along the actual swap axis between them ("this
+// way") — a real directional cue, not just a shimmer.
+function hintSparkle(handleA, handleB, cells){
   const targets = [handleA, handleB].filter(Boolean);
   const timers = targets.map(h=>{
     let t = 0;
     return setInterval(()=>{
       t += 1;
-      const s = 1 + Math.sin(t*0.7)*0.08;
+      const s = 1 + Math.sin(t*0.7)*0.15;
       h.container.scale.set(s);
     }, 45);
   });
+
+  let arrowGfx = null, arrowTimer = null, glowA = null, glowB = null;
+  const app = ensureLayers();
+  if(cells && cells[0] && cells[1] && app && particleLayer){
+    const posA = render.cellCenter(cells[0].r, cells[0].c);
+    const posB = render.cellCenter(cells[1].r, cells[1].c);
+    const size = render.getTileSize ? render.getTileSize() : 60;
+    const horizontal = cells[0].r === cells[1].r;
+
+    glowA = new PIXI.Graphics();
+    glowB = new PIXI.Graphics();
+    [[glowA,posA],[glowB,posB]].forEach(([g,pos])=>{
+      g.circle(0,0,size*0.46).stroke({ width:3, color:0xf4d78c, alpha:0.9 });
+      g.x = pos.x; g.y = pos.y;
+      particleLayer.addChild(g);
+    });
+
+    arrowGfx = new PIXI.Graphics();
+    particleLayer.addChild(arrowGfx);
+    const dx = posB.x-posA.x, dy = posB.y-posA.y;
+    const len = Math.hypot(dx,dy) || 1;
+    const ux = dx/len, uy = dy/len;
+    const headLen = size*0.16, headW = size*0.11;
+    let at = 0;
+    arrowTimer = setInterval(()=>{
+      at += 0.14;
+      const nudge = Math.sin(at) * size * 0.22; // rides back and forth between the two cells, not a static midpoint icon
+      const mx = (posA.x+posB.x)/2 + (horizontal ? nudge : 0);
+      const my = (posA.y+posB.y)/2 + (horizontal ? 0 : nudge);
+      arrowGfx.clear();
+      [[ux,uy],[-ux,-uy]].forEach(([dirx,diry])=>{
+        const tx = mx+dirx*headLen, ty = my+diry*headLen;
+        const px = -diry, py = dirx;
+        arrowGfx.moveTo(tx,ty)
+          .lineTo(mx+px*headW, my+py*headW)
+          .lineTo(mx-px*headW, my-py*headW)
+          .closePath()
+          .fill({ color:0xf4d78c, alpha:0.95 });
+      });
+    }, 45);
+  }
+
   return ()=>{
     timers.forEach(clearInterval);
+    if(arrowTimer) clearInterval(arrowTimer);
     targets.forEach(h=>{ if(h && h.container && !h.container.destroyed) h.container.scale.set(1); });
+    [arrowGfx, glowA, glowB].forEach(g=>{
+      if(g && !g.destroyed){ particleLayer && particleLayer.removeChild(g); g.destroy(); }
+    });
   };
 }
 

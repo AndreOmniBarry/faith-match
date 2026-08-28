@@ -160,10 +160,24 @@ function renderDashboard(){
   const inv = $('dash-inventory');
   const items = rewards.getInventory();
   const owned = Object.entries(items).filter(([,n])=>n>0);
+  // The chips here only ever showed an emoji, a name, and a count — no
+  // room for (and previously no) explanation of what an item actually
+  // does, which is exactly why items like Shield/Sky Hook/Slow-Mo Sand
+  // read as unlabeled mystery icons. Every chip is now tappable and shows
+  // its real description (the same one already used in the in-game hints
+  // tray, see renderTray() below) via a toast, instead of duplicating
+  // full descriptions inline and cramping the compact chip row.
   inv.innerHTML = owned.length ? owned.map(([id,n])=>{
     const meta = rewards.ITEMS[id];
-    return `<div class="dash-item">${meta.emoji} ${meta.name} <strong>×${n}</strong></div>`;
+    if(!meta) return ''; // an id no longer in ITEMS (e.g. an old save) shouldn't take the whole dashboard down
+    return `<button class="dash-item" type="button" data-item-id="${id}">${meta.emoji} ${meta.name} <strong>×${n}</strong></button>`;
   }).join('') : '<div class="dash-empty">Nothing yet — earn items by finishing chapters and daily sessions.</div>';
+  inv.querySelectorAll('[data-item-id]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const meta = rewards.ITEMS[btn.dataset.itemId];
+      if(meta) showToast(`${meta.emoji} ${meta.name} — ${meta.desc}`, 2600);
+    });
+  });
 
   const starsEl = $('dash-stars');
   starsEl.innerHTML = MODES.filter(m=>!m.daily).map(m=>
@@ -586,6 +600,32 @@ function backToMap(modeId){
 
 /* ============================= GAME: chrome + HUD ============================= */
 
+// A plain sentence describing what to actually do, in place of the old
+// "just a raw number" objective display — pilot feedback specifically
+// asked for a task description before a level starts and a reminder of it
+// during play. Reuses the level's own real data (target/collect/veil/
+// timedSeconds), not a generic placeholder, so it's accurate for every
+// mode and finale variant.
+function taskDescriptionFor(level){
+  const movesTxt = `${level.moves} move${level.moves===1?'':'s'}`;
+  let sentence;
+  if(level.objective==='collect'){
+    const parts = (level.collect||[]).map(req=>`${req.count} ${SYMBOLS[req.type]?.name || 'piece'}${req.count===1?'':'s'}`);
+    const list = parts.length>1
+      ? parts.slice(0,-1).join(', ')+' and '+parts[parts.length-1]
+      : (parts[0] || 'the marked pieces');
+    sentence = `Collect ${list} within ${movesTxt}.`;
+  }else if(level.objective==='veil'){
+    const n = level.veil?.cells?.length || 0;
+    sentence = `Free all ${n} veiled tile${n===1?'':'s'} — match beside a veiled tile to crack it, within ${movesTxt}.`;
+  }else{
+    sentence = `Score ${level.target}+ points within ${movesTxt}.`;
+  }
+  if(level.timedSeconds) sentence += ` You also have ${formatTime(level.timedSeconds)} on the clock.`;
+  if(level.finale) sentence = `Stage Finale — ${sentence}`;
+  return sentence;
+}
+
 function objectiveAreaHTML(level){
   if(level.objective==='collect'){
     return `<div class="collect-row" id="collect-row"></div>
@@ -605,6 +645,16 @@ function renderGameChrome(level){
   $('game-level-name').textContent = level.mode==='daily-blessing'
     ? "Today's Blessing" : `LEVEL ${level.index+1} · ${level.name}`;
   $('game-mode-name').textContent = level.finale ? `${mode.name} · Stage Finale` : mode.name;
+
+  const task = taskDescriptionFor(level);
+  const banner = $('task-banner');
+  banner.textContent = task;
+  banner.onclick = ()=>showToast(task, 3000);
+  // Announced once as a toast the moment the level opens too — the banner
+  // sitting quietly in the HUD is the "reminder", this is the "before you
+  // start" read pilot feedback asked for.
+  showToast(task, 3000);
+
   $('objective-area').innerHTML = objectiveAreaHTML(level);
   if(level.objective==='collect'){
     const row = $('collect-row');
@@ -844,11 +894,11 @@ function startIdleLoop(){
   idleTimer = setInterval(()=>{
     if(engine.isBusy()) return;
     if(Date.now()-lastInteraction < IDLE_MS) return;
-    const { tileEls, hintEls } = engine.getIdleVisualTargets();
+    const { tileEls, hintEls, hintCells } = engine.getIdleVisualTargets();
     effects.idleShimmer(tileEls);
     if(hintEls && hintEls[0] && hintEls[1] && !hintClear){
-      hintClear = effects.hintSparkle(hintEls[0], hintEls[1]);
-      setTimeout(clearHint, 1700);
+      hintClear = effects.hintSparkle(hintEls[0], hintEls[1], hintCells);
+      setTimeout(clearHint, 3200); // was 1700 — the old subtle pulse could afford to be brief; the new directional arrow deserves time to actually be seen
     }
   }, 2200);
 }
@@ -867,6 +917,7 @@ function renderTray(){
   list.innerHTML = '';
   owned.forEach(([id,count])=>{
     const meta = rewards.ITEMS[id];
+    if(!meta) return; // an id no longer in ITEMS (e.g. an old save) shouldn't take the whole tray down
     const btn = document.createElement('button');
     btn.className = 'tray-item';
     btn.innerHTML = `<span class="ti-emoji">${meta.emoji}</span>
