@@ -81,6 +81,25 @@ function checkLine(get,r,c){
   while(rr<rows && get(rr,c)===t){run++;rr++;}
   return run>=3;
 }
+// Would swapping these two form a 2x2 block through either landing cell?
+// findMatches() itself already detects blocks fine post-swap (that's what
+// actually clears one) — this is what makes a block-only move *count as a
+// legal move in the first place* to hasPossibleMove()/findValidSwapHint()
+// below, both built on wouldMatch(). Without it, a board whose only
+// remaining move happened to be block-shaped would misread as "stuck" and
+// trigger an unnecessary reshuffle.
+function wouldFormSquare(get,r,c){
+  const t = get(r,c);
+  if(t<0) return false;
+  for(let dr=-1;dr<=0;dr++){
+    for(let dc=-1;dc<=0;dc++){
+      const r0=r+dr, c0=c+dc;
+      if(r0<0||r0+1>=rows||c0<0||c0+1>=cols) continue;
+      if(get(r0,c0)===t && get(r0,c0+1)===t && get(r0+1,c0)===t && get(r0+1,c0+1)===t) return true;
+    }
+  }
+  return false;
+}
 // `at` defaults to the live-grid typeAt so every existing call site
 // (hasPossibleMove(), findValidSwapHint(), etc.) is unaffected — but it can
 // be pointed at an arbitrary candidate accessor instead, which is what lets
@@ -90,7 +109,7 @@ function wouldMatch(r1,c1,r2,c2, at=typeAt){
   const t1 = at(r1,c1), t2 = at(r2,c2);
   if(t1===t2 || t1<0 || t2<0) return false;
   const get = (r,c)=> (r===r1&&c===c1) ? t2 : (r===r2&&c===c2) ? t1 : at(r,c);
-  return checkLine(get,r1,c1) || checkLine(get,r2,c2);
+  return checkLine(get,r1,c1) || checkLine(get,r2,c2) || wouldFormSquare(get,r1,c1) || wouldFormSquare(get,r2,c2);
 }
 function hasPossibleMove(at=typeAt){
   for(let r=0;r<rows;r++){
@@ -155,7 +174,12 @@ function buildInitialBoard(lvl){
         }while(
           tries < 30 && (
             (c>=2 && typeAt(r,c-1)===type && typeAt(r,c-2)===type) ||
-            (r>=2 && typeAt(r-1,c)===type && typeAt(r-2,c)===type)
+            (r>=2 && typeAt(r-1,c)===type && typeAt(r-2,c)===type) ||
+            // Same "don't spawn an already-matched board" intent as the two
+            // line checks above, extended to the block shape square
+            // matching now recognizes: reject completing a 2x2 with the
+            // three neighbors already placed above/left of this cell.
+            (r>=1 && c>=1 && typeAt(r-1,c-1)===type && typeAt(r-1,c)===type && typeAt(r,c-1)===type)
           )
         );
         const id = nextId++;
@@ -212,7 +236,34 @@ function findMatches(){
       r=r2;
     }
   }
-  return runs;
+  return [...runs, ...findSquareMatches(runs)];
+}
+
+// A pure 2x2 block of one type (no 3-in-a-row in either direction) was
+// previously invisible to matching entirely — pilot feedback specifically
+// asked for block/square shapes to count, not just straight lines. Only
+// claims a block whose 4 cells aren't *already* part of a 3+ line run —
+// a bigger blob (2x3, 3x3, ...) already matches fine via the h/v scan
+// above; this only adds coverage for the block shape that scan can never
+// see on its own.
+function findSquareMatches(lineRuns){
+  const lineRunCells = new Set();
+  lineRuns.forEach(run=>run.cells.forEach(([r,c])=>lineRunCells.add(r+','+c)));
+  const claimed = new Set();
+  const squares = [];
+  for(let r=0;r<rows-1;r++){
+    for(let c=0;c<cols-1;c++){
+      const t = typeAt(r,c);
+      if(t<0) continue;
+      if(typeAt(r,c+1)!==t || typeAt(r+1,c)!==t || typeAt(r+1,c+1)!==t) continue;
+      const cells = [[r,c],[r,c+1],[r+1,c],[r+1,c+1]];
+      const keys = cells.map(([rr,cc])=>rr+','+cc);
+      if(keys.some(k=>lineRunCells.has(k) || claimed.has(k))) continue;
+      keys.forEach(k=>claimed.add(k));
+      squares.push({ dir:'square', length:4, cells });
+    }
+  }
+  return squares;
 }
 
 function pickAnchor(run, preferred){
@@ -250,6 +301,18 @@ function decideCreations(runs){
       creations.push({ r:anchor[0], c:anchor[1], special:{kind:flavor} });
       used.add(i);
     }
+  });
+
+  // 2x2 block matches — same "not a straight line" reward tier as an L/T
+  // intersection below, so a block also creates a Wrapped candy. Handled
+  // here, before the L/T pairing pass, so a square run (dir:'square')
+  // gets marked used and never risks being swept into that pass's
+  // dir-mismatch pairing logic.
+  runs.forEach((run,i)=>{
+    if(used.has(i) || run.dir!=='square') return;
+    const anchor = pickAnchor(run, swapAnchorCells);
+    creations.push({ r:anchor[0], c:anchor[1], special:{kind:'wrapped'} });
+    used.add(i);
   });
 
   for(let i=0;i<runs.length;i++){
@@ -962,7 +1025,13 @@ function getComboMeter(){ return comboMeter; }
 // what they got — a Surge should never read as "nothing happened". The
 // flavor differs (moves vs. a gifted special vs. a board-clearing blast),
 // but the score line and the toast are guaranteed every single time.
-const SURGE_BASE_BONUS = 120;
+//
+// The score bonus itself scales to *this level's own target* (8%, floored
+// at 80) instead of a flat number — a flat +300 was real at chapter 1's
+// ~700-point target but read as basically nothing once targets climbed
+// into the thousands, which is exactly what made Surge feel "useless"
+// even though it technically did something every time.
+function surgeScaledBonus(){ return Math.max(80, Math.round((level.target||1500) * 0.08)); }
 
 // True once a tap has been accepted but the board wasn't idle yet to
 // resolve it — see popComboMeter()/checkEndConditions() below.
@@ -997,23 +1066,43 @@ async function fireSurge(){
   notifyHUD();
   audio.playSurgeSting();
   effects.comboPopup(3);
-  const effect = ['hammerRandom','bonusMoves','freeColorBomb','scoreBurst'][rand(4)];
+  const effect = ['hammerRandom','bonusMoves','freeColorBomb','crossClear'][rand(4)];
+  const scaledBonus = surgeScaledBonus();
 
   if(effect==='bonusMoves'){
     movesLeft += 2;
-    score += SURGE_BASE_BONUS;
+    score += scaledBonus;
     effects.flash('var(--gold-soft)', 400);
-    callbacks.onToast && callbacks.onToast(`Surge! +2 Moves and +${SURGE_BASE_BONUS} ✨`);
-  }else if(effect==='scoreBurst'){
-    score += 300;
-    const {x,y} = render.cellCenter((rows/2)|0, (cols/2)|0);
+    callbacks.onToast && callbacks.onToast(`Surge! +2 Moves and +${scaledBonus} ✨`);
+  }else if(effect==='crossClear'){
+    // Used to be a flat +300 with zero board effect — the one branch that
+    // genuinely did "nothing" beyond a number ticking up, and the most
+    // likely reason Surge read as a useless power-up. Now every branch
+    // moves the board: a 5-cell cross (plus-shape) clear through a random
+    // tile, same footprint idea as the hammer branch below, just smaller.
+    const cr = rand(rows), cc = rand(cols);
+    const cells = [[cr,cc]];
+    [[-1,0],[1,0],[0,-1],[0,1]].forEach(([dr,dc])=>{
+      const r=cr+dr, c=cc+dc;
+      if(r>=0&&r<rows&&c>=0&&c<cols) cells.push([r,c]);
+    });
+    const {x,y} = render.cellCenter(cr,cc);
     effects.flash('var(--gold-soft)', 400);
     effects.burst(x,y,'var(--gold-soft)','huge');
-    callbacks.onToast && callbacks.onToast('Surge! +300 ✨');
+    effects.shake(10,260);
+    const keys = cells.map(([r,c])=>r+','+c);
+    crackAdjacentVeils(new Set(keys));
+    tallyCollect(keys, new Set());
+    const gained = scaledBonus + cells.length*15;
+    score += gained;
+    cells.forEach(([r,c])=>{ veilGrid[r][c] = 0; });
+    await clearCells(cells);
+    await resolveLoop({});
+    callbacks.onToast && callbacks.onToast(`Surge! +${gained} ✨`);
   }else if(effect==='freeColorBomb'){
-    score += SURGE_BASE_BONUS;
+    score += scaledBonus;
     spawnFreeColorBomb();
-    callbacks.onToast && callbacks.onToast(`Surge! Free Color Bomb gifted, +${SURGE_BASE_BONUS} ✨`);
+    callbacks.onToast && callbacks.onToast(`Surge! Free Color Bomb gifted, +${scaledBonus} ✨`);
   }else{
     const cr = rand(rows), cc = rand(cols);
     const cells = [];
@@ -1027,7 +1116,7 @@ async function fireSurge(){
     const keys = cells.map(([r,c])=>r+','+c);
     crackAdjacentVeils(new Set(keys));
     tallyCollect(keys, new Set());
-    const gained = cells.length*20;
+    const gained = scaledBonus + cells.length*20;
     score += gained;
     cells.forEach(([r,c])=>{ veilGrid[r][c] = 0; }); // the surge bypasses locks in its blast radius
     await clearCells(cells);
@@ -1199,13 +1288,14 @@ function resizeBoard(){
 function getIdleVisualTargets(){
   const tileEls = []; tilesById.forEach(t=>{ if(t.el) tileEls.push(t.el); });
   const hint = findValidSwapHint();
-  let hintEls = null;
+  let hintEls = null, hintCells = null;
   if(hint){
     const [a,b] = hint;
     const ida = grid[a.r][a.c], idb = grid[b.r][b.c];
     hintEls = [ida && tilesById.get(ida).el, idb && tilesById.get(idb).el];
+    hintCells = [a,b]; // raw row/col, so effects.js can draw a directional arrow between the two without reaching into tile-handle internals
   }
-  return { tileEls, hintEls };
+  return { tileEls, hintEls, hintCells };
 }
 
 function getTileElAt(r,c){
