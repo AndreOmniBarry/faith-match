@@ -385,6 +385,24 @@ function placeTileInstant(handle, r, c){
   handle.container.x = c*tileSize + tileSize/2;
   handle.container.y = r*tileSize + tileSize/2;
 }
+// Same cleanup setTileTransform() does (cancel any in-flight tween, drop
+// the drag lift/base bookkeeping), but places the tile instantly instead
+// of tweening there. That distinction matters specifically right before
+// triggering a shake (TileHandle.playShake(), see its own comment): shake
+// reads the container's *current* position synchronously as the point to
+// wiggle around and return to. Pair it with setTileTransform() — whose
+// tween hasn't advanced anywhere yet at the instant shake reads it — and
+// shake captures the pre-tween (wrong) position, then outlasts and wins
+// over that tween (playShake never calls cancelTweensOf, so nothing stops
+// it), permanently freezing the tile there instead of at its real cell.
+// Calling this first means shake always captures the *true* home position.
+function snapTileHome(handle, r, c){
+  if(!handle) return;
+  cancelTweensOf(handle.container, ['x','y']);
+  handle._dragBaseX = handle._dragBaseY = null;
+  handle.container.zIndex = 0;
+  placeTileInstant(handle, r, c);
+}
 // Used on window resize: snap size+position immediately, no tween (a tween
 // mid-resize would visibly lag behind the new layout).
 function resizeTile(handle, r, c){
@@ -479,7 +497,7 @@ function renderFullBoard(rowsArg, colsArg, grid, tilesById, onPointerDown){
 
 export {
   setBoardEl, getBoardEl, getApp, getReady, measureTileSize, getTileSize, cellCenter, setTileTransform,
-  placeTileInstant, resizeTile, createTileEl, refreshTileVisual, renderFullBoard, removeTileEl,
+  snapTileHome, placeTileInstant, resizeTile, createTileEl, refreshTileVisual, renderFullBoard, removeTileEl,
   playLandAnimation, playSwapStretch,
   beginTileDrag, updateTileDrag, endTileDragSnapBack,
   tween, cancelTweensOf, easeOutBack, easeOutCubic, hexOf,
