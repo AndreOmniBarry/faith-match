@@ -543,38 +543,62 @@ async function clearCells(cellKeys){
   await sleep(FALL_MS);
 }
 
+// A veiled cell is a fixed obstacle — it must never move, and nothing may
+// fall *into* or *through* it. This never actually checked veilGrid at
+// all, so a veiled tile fell like any other the moment cells below it
+// cleared: its .veil property (what render.js draws) went with it, but
+// veilGrid — what typeAt()/isSwappable()/match detection actually use —
+// stayed pointed at the tile's old, now-wrong position. That's what read
+// as "a veiled piece moving unnaturally", and the resulting desync is
+// also what could leave a cell permanently unfilled (a stray blank tile)
+// once the collapse math for that column no longer matched reality.
+// Fix: treat each column as segments split at every veiled row — tiles
+// collapse within their own segment only, same as the whole column used
+// to, and a veiled row is never written to by either loop.
+function collapseColumnSegment(c, top, bottom, landedTiles){
+  if(bottom < top) return;
+  let writeRow = bottom;
+  for(let r=bottom;r>=top;r--){
+    const id = grid[r][c];
+    if(id!=null){
+      if(writeRow!==r){
+        grid[writeRow][c] = id;
+        grid[r][c] = null;
+        const t = tilesById.get(id);
+        t.r = writeRow;
+        render.setTileTransform(t.el, writeRow, c);
+        landedTiles.push(t);
+      }
+      writeRow--;
+    }
+  }
+  let spawnOffset = 1;
+  for(let r=writeRow;r>=top;r--){
+    const type = rand(colorCount);
+    const id = nextId++;
+    const tile = { id, r, c, type, special:null, veil:0, el:null };
+    tilesById.set(id, tile);
+    const el = render.createTileEl(tile, onTilePointerDown);
+    tile.el = el;
+    render.placeTileInstant(el, r-spawnOffset, c); // starts above the board, out of view
+    render.setTileTransform(el, r, c);              // tweens smoothly down into place
+    grid[r][c] = id;
+    landedTiles.push(tile);
+    spawnOffset++;
+  }
+}
+
 function collapseAndRefill(){
   const landedTiles = [];
   for(let c=0;c<cols;c++){
-    let writeRow = rows-1;
+    let segBottom = rows-1;
     for(let r=rows-1;r>=0;r--){
-      const id = grid[r][c];
-      if(id!=null){
-        if(writeRow!==r){
-          grid[writeRow][c] = id;
-          grid[r][c] = null;
-          const t = tilesById.get(id);
-          t.r = writeRow;
-          render.setTileTransform(t.el, writeRow, c);
-          landedTiles.push(t);
-        }
-        writeRow--;
+      if(veilGrid[r][c] > 0){
+        collapseColumnSegment(c, r+1, segBottom, landedTiles);
+        segBottom = r-1;
       }
     }
-    let spawnOffset = 1;
-    for(let r=writeRow;r>=0;r--){
-      const type = rand(colorCount);
-      const id = nextId++;
-      const tile = { id, r, c, type, special:null, veil:0, el:null };
-      tilesById.set(id, tile);
-      const el = render.createTileEl(tile, onTilePointerDown);
-      tile.el = el;
-      render.placeTileInstant(el, r-spawnOffset, c); // starts above the board, out of view
-      render.setTileTransform(el, r, c);              // tweens smoothly down into place
-      grid[r][c] = id;
-      landedTiles.push(tile);
-      spawnOffset++;
-    }
+    collapseColumnSegment(c, 0, segBottom, landedTiles);
   }
   setTimeout(()=>landedTiles.forEach(t=>render.playLandAnimation(t)), FALL_MS-40);
 }
