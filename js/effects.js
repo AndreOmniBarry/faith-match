@@ -140,6 +140,33 @@ function cometStreak(x0, y0, targets, color){
   });
 }
 
+// Combo Surge's signature — was a single local burst plus a plain flash,
+// which is why it read as "a flash bang and a few points" no matter what
+// the tap actually did underneath it. This is the one moment the whole
+// board should visibly erupt regardless of which of Surge's random
+// outcomes lands, so it's a *shared* spectacle every branch plays before
+// its own specific effect, not something scaled per-branch: five bursts
+// staggered across the board (not one point, so it doesn't read as "local"
+// like a normal match), three expanding rings racing outward from center
+// through the game's three "big moment" glow colors, and it hands back a
+// duration so callers know how long to hold off starting anything quieter.
+function surgeBlast(){
+  const app = ensureLayers();
+  if(!app) return 0;
+  const w = app.renderer.width/(app.renderer.resolution||1), h = app.renderer.height/(app.renderer.resolution||1);
+  const cx = w/2, cy = h/2;
+  const colors = ['var(--gold-soft)', 'var(--colorbomb-glow)', 'var(--halo-glow)'];
+  const points = [
+    {x:cx, y:cy}, {x:w*0.18, y:h*0.22}, {x:w*0.82, y:h*0.22},
+    {x:w*0.18, y:h*0.8}, {x:w*0.82, y:h*0.8},
+  ];
+  points.forEach((p,i)=>{
+    setTimeout(()=>burst(p.x, p.y, colors[i%colors.length], i===0?'huge':'large'), i*55);
+  });
+  colors.forEach((c,i)=>setTimeout(()=>ring(cx, cy, c, 10), i*110));
+  return 420;
+}
+
 /* ---------- screen shake (still the DOM board-arch frame) ---------- */
 function shake(magnitude, duration){
   if(!boardArch) return;
@@ -309,6 +336,6 @@ function hintSparkle(handleA, handleB, cells){
 
 export {
   init, resizeCanvas, burst, ring, beam, trail, bloom, shake, flash, pulseAmbient,
-  frostShatter, cometStreak,
+  frostShatter, cometStreak, surgeBlast,
   comboPopup, confettiBurst, idleShimmer, hintSparkle,
 };

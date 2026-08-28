@@ -1090,13 +1090,28 @@ async function fireSurge(){
   notifyHUD();
   audio.playSurgeSting();
   effects.comboPopup(3);
+  // Was a single local burst plus a plain flash on whichever branch landed
+  // — "a flash bang and a few points" no matter what actually happened
+  // underneath it, per direct feedback. This shared spectacle plays for
+  // *every* branch now, before its own specific effect: a real ripple
+  // (not a flat flash), the strongest shake in the game (bigger than a
+  // Halo Bomb), an ambient charge, and the whole board erupting from five
+  // points at once — so Surge reads as the biggest moment regardless of
+  // which random outcome underneath it fires.
+  effects.flash('var(--gold-soft)', 650, 'ripple');
+  effects.shake(20, 520);
+  effects.pulseAmbient(1200);
+  effects.surgeBlast();
   const effect = ['hammerRandom','bonusMoves','freeColorBomb','crossClear'][rand(4)];
   const scaledBonus = surgeScaledBonus();
 
   if(effect==='bonusMoves'){
     movesLeft += 2;
     score += scaledBonus;
-    effects.flash('var(--gold-soft)', 400);
+    // No extra flash/shake here — the shared spectacle above already
+    // covers it; a second flash()/shake() call this soon after would just
+    // cut the first one short (each restarts its own animation loop) and
+    // read as a stutter instead of one clean, bigger motion.
     callbacks.onToast && callbacks.onToast(`Surge! +2 Moves and +${scaledBonus} ✨`);
   }else if(effect==='crossClear'){
     // Used to be a flat +300 with zero board effect — the one branch that
@@ -1111,9 +1126,7 @@ async function fireSurge(){
       if(r>=0&&r<rows&&c>=0&&c<cols) cells.push([r,c]);
     });
     const {x,y} = render.cellCenter(cr,cc);
-    effects.flash('var(--gold-soft)', 400);
     effects.burst(x,y,'var(--gold-soft)','huge');
-    effects.shake(10,260);
     const keys = cells.map(([r,c])=>r+','+c);
     crackAdjacentVeils(new Set(keys));
     tallyCollect(keys, new Set());
@@ -1135,8 +1148,6 @@ async function fireSurge(){
     }
     const {x,y} = render.cellCenter(cr,cc);
     effects.bloom(x,y,'var(--wrapped-glow)','huge');
-    effects.shake(14,300);
-    effects.pulseAmbient(700);
     const keys = cells.map(([r,c])=>r+','+c);
     crackAdjacentVeils(new Set(keys));
     tallyCollect(keys, new Set());
