@@ -438,13 +438,16 @@ function diffColor(rating){
   return '#d8455f';
 }
 
-// Builds the node/banner layout for one continuous map spanning every
-// chapter passed in. Coordinates: x in track-width percent (0-100), y in
-// px — the SVG trail below is drawn in the same units so it lines up with
-// the DOM nodes exactly.
-function buildMapLayout(chaptersData){
-  let y = 34;
-  let globalIdx = 0;
+// Builds the node/banner layout for one batch of chapters, continuing from
+// wherever a previous batch left off (startY/startGlobalIdx) — the World
+// Map loads chapters lazily as the player scrolls (see renderWorldMap), so
+// this has to pick up the running y-position and wave phase rather than
+// always starting fresh at the top. Coordinates: x in track-width percent
+// (0-100), y in px — the SVG trail is drawn in the same units so it lines
+// up with the DOM nodes exactly.
+function buildMapLayout(chaptersData, startY, startGlobalIdx){
+  let y = startY;
+  let globalIdx = startGlobalIdx;
   const nodes = [], banners = [];
   chaptersData.forEach(({ chapterNum, levels, gate })=>{
     const bannerY = y;
@@ -461,7 +464,7 @@ function buildMapLayout(chaptersData){
     // chapter sitting on one flat, undifferentiated background.
     banners.push({ chapterNum, y: bannerY, regionEnd: y });
   });
-  return { nodes, banners, totalHeight: y + 40 };
+  return { nodes, banners, endY: y, endGlobalIdx: globalIdx };
 }
 
 // Smooth curve through every node center, via the standard "quadratic
@@ -480,61 +483,33 @@ function buildMapPathD(points){
   return d;
 }
 
-async function renderWorldMap(mode){
-  theme.resetTheme();
-  $('map-title').textContent = mode.name;
-  $('map-sub').textContent = mode.blurb;
-  const track = $('map-track');
-  track.style.height = '';
-  track.innerHTML = '<div class="map-loading">Charting the path…</div>';
+// World Map lazy-load state — one live map screen at a time, so a single
+// module-level record is enough. `points` accumulates every node's {x,y}
+// across every batch loaded so far, because the SVG trail is one single
+// path spanning the whole map: each new batch has to redraw it from the
+// full point list, not just append a disconnected segment.
+let mapLazy = null;
+const MAP_BATCH_CHAPTERS = 6;   // chapters fetched per lazy-load batch
+const MAP_LOAD_THRESHOLD_PX = 900; // trigger the next batch this far from the bottom
 
+// Renders the washes/banners/nodes for one batch of already-fetched chapter
+// data and appends them to the track — shared by the initial load and every
+// later lazy-load batch so the two stay visually identical.
+function appendMapBatch(track, mode, chaptersData){
   const unlocked = state.getUnlockedCount(mode.id);
-  const unlockedChapters = Math.ceil(unlocked / CHAPTER_SIZE);
-  // Was a hardcoded 1000 here, disconnected from content.js's own
-  // CONTENT_CEILING_LEVELS constant — bumping that constant alone silently
-  // did nothing to the World Map, since this never read it. Now it does.
-  const ceilingChapters = Math.ceil(CONTENT_CEILING_LEVELS/CHAPTER_SIZE);
-  const totalToShow = Math.min(ceilingChapters, Math.max(3, unlockedChapters + 2));
-
-  const chapterNums = Array.from({ length: totalToShow }, (_, i)=>i+1);
-  const chaptersData = await Promise.all(chapterNums.map(async ch=>{
-    const { levels, gate } = await getChapter(mode.id, ch);
-    return { chapterNum: ch, levels, gate };
-  }));
-  if(nav.mode !== mode.id) return; // player navigated away while this was loading
-
-  const { nodes, banners, totalHeight } = buildMapLayout(chaptersData);
-  track.style.height = totalHeight + 'px';
-
-  // Region washes first, so they sit behind everything as real atmosphere
-  // per chapter instead of one flat, undifferentiated background for the
-  // whole scroll — each chapter now visibly reads as its own place.
-  const washesHTML = banners.map(b=>{
-    const color = theme.chapterColor(b.chapterNum);
-    return `<div class="map-region-wash" style="top:${b.y}px; height:${b.regionEnd-b.y}px; --band-color:${color}"></div>`;
-  }).join('');
-
-  // Dual-layer path: a wide, blurred, low-opacity glow underneath a thin
-  // crisp line on top — a lit trail rather than a wireframe sketch. Three
-  // small lights travel the trail continuously (native SVG animateMotion —
-  // hardware-accelerated, no per-frame JS) so the map reads as a place
-  // with something actually happening in it, not a static diagram.
-  const pathD = buildMapPathD(nodes.map(n=>({x:n.x,y:n.y})));
-  const flowDot = (dur, begin, r) => `
-    <circle r="${r}" class="map-flow-dot">
-      <animateMotion dur="${dur}s" begin="${begin}s" repeatCount="indefinite" rotate="auto">
-        <mpath href="#mapTrailPath"/>
-      </animateMotion>
-    </circle>`;
-  const pathHTML = `<svg class="map-path-svg" viewBox="0 0 100 ${totalHeight}" preserveAspectRatio="none">
-    <path d="${pathD}" class="map-path-glow" fill="none" stroke-linecap="round"/>
-    <path id="mapTrailPath" d="${pathD}" class="map-path-line" fill="none" stroke-linecap="round"/>
-    ${flowDot(9, 0, 1.6)}${flowDot(9, -3, 1.3)}${flowDot(9, -6, 1.1)}
-  </svg>`;
-
-  track.innerHTML = washesHTML + pathHTML;
+  const { nodes, banners, endY, endGlobalIdx } = buildMapLayout(chaptersData, mapLazy.y, mapLazy.globalIdx);
+  mapLazy.y = endY;
+  mapLazy.globalIdx = endGlobalIdx;
+  mapLazy.points.push(...nodes.map(n=>({x:n.x, y:n.y})));
 
   banners.forEach(b=>{
+    const wash = document.createElement('div');
+    wash.className = 'map-region-wash';
+    wash.style.top = b.y + 'px';
+    wash.style.height = (b.regionEnd - b.y) + 'px';
+    wash.style.setProperty('--band-color', theme.chapterColor(b.chapterNum));
+    track.appendChild(wash);
+
     const el = document.createElement('div');
     el.className = 'map-chapter-banner';
     el.style.top = b.y + 'px';
@@ -596,8 +571,106 @@ async function renderWorldMap(mode){
     if(isCurrent) currentNodeEl = btn;
   });
 
+  track.style.height = (mapLazy.y + 40) + 'px';
+  const pathD = buildMapPathD(mapLazy.points);
+  mapLazy.pathGlowEl.setAttribute('d', pathD);
+  mapLazy.pathLineEl.setAttribute('d', pathD);
+  mapLazy.svgEl.setAttribute('viewBox', `0 0 100 ${mapLazy.y + 40}`);
+
+  return currentNodeEl;
+}
+
+// Fetches and appends the next batch of chapters once the player scrolls
+// near the bottom of what's currently rendered — this is what actually
+// makes the trail feel endless (Candy Crush's own journey map works the
+// same way) instead of the old fixed "unlocked + 2 chapters" render that
+// just stopped, reading as the map closing after a few chapters.
+async function loadMoreMapChapters(){
+  if(!mapLazy || mapLazy.loading || mapLazy.done) return;
+  const ceilingChapters = Math.ceil(CONTENT_CEILING_LEVELS/CHAPTER_SIZE);
+  if(mapLazy.nextChapter > ceilingChapters) { mapLazy.done = true; return; }
+  mapLazy.loading = true;
+  const mode = mapLazy.mode;
+  const batchEnd = Math.min(ceilingChapters, mapLazy.nextChapter + MAP_BATCH_CHAPTERS - 1);
+  const chapterNums = [];
+  for(let ch=mapLazy.nextChapter; ch<=batchEnd; ch++) chapterNums.push(ch);
+  const chaptersData = await Promise.all(chapterNums.map(async ch=>{
+    const { levels, gate } = await getChapter(mode.id, ch);
+    return { chapterNum: ch, levels, gate };
+  }));
+  if(!mapLazy || nav.mode !== mode.id){ return; } // navigated away while fetching
+  mapLazy.nextChapter = batchEnd + 1;
+  if(mapLazy.nextChapter > ceilingChapters) mapLazy.done = true;
+  appendMapBatch($('map-track'), mode, chaptersData);
+  mapLazy.loading = false;
+}
+
+function onMapScroll(){
+  if(!mapLazy) return;
+  const el = mapLazy.scrollEl;
+  if(el.scrollTop + el.clientHeight >= el.scrollHeight - MAP_LOAD_THRESHOLD_PX) loadMoreMapChapters();
+}
+
+async function renderWorldMap(mode){
+  theme.resetTheme();
+  $('map-title').textContent = mode.name;
+  $('map-sub').textContent = mode.blurb;
+  const track = $('map-track');
+  const scrollEl = track.parentElement; // .map-scroll — the actual scroll container, see base.css's shell lock
+  scrollEl.removeEventListener('scroll', onMapScroll);
+  track.style.height = '';
+  track.innerHTML = '<div class="map-loading">Charting the path…</div>';
+
+  const unlocked = state.getUnlockedCount(mode.id);
+  const unlockedChapters = Math.ceil(unlocked / CHAPTER_SIZE);
+  const ceilingChapters = Math.ceil(CONTENT_CEILING_LEVELS/CHAPTER_SIZE);
+  // A comfortable initial buffer ahead of progress, not the whole map —
+  // loadMoreMapChapters() tops it up as the player scrolls, so this only
+  // needs to fill a screen or two up front, not guess the eventual total.
+  const initialChapters = Math.min(ceilingChapters, Math.max(6, unlockedChapters + 4));
+
+  const chapterNums = Array.from({ length: initialChapters }, (_, i)=>i+1);
+  const chaptersData = await Promise.all(chapterNums.map(async ch=>{
+    const { levels, gate } = await getChapter(mode.id, ch);
+    return { chapterNum: ch, levels, gate };
+  }));
+  if(nav.mode !== mode.id) return; // player navigated away while this was loading
+
+  // Dual-layer path: a wide, blurred, low-opacity glow underneath a thin
+  // crisp line on top — a lit trail rather than a wireframe sketch. Three
+  // small lights travel the trail continuously (native SVG animateMotion —
+  // hardware-accelerated, no per-frame JS) so the map reads as a place
+  // with something actually happening in it, not a static diagram. Path
+  // data itself starts empty and is filled in by appendMapBatch() below,
+  // same as every later lazy-load batch.
+  const flowDot = (dur, begin, r) => `
+    <circle r="${r}" class="map-flow-dot">
+      <animateMotion dur="${dur}s" begin="${begin}s" repeatCount="indefinite" rotate="auto">
+        <mpath href="#mapTrailPath"/>
+      </animateMotion>
+    </circle>`;
+  track.innerHTML = `<svg class="map-path-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
+    <path class="map-path-glow" fill="none" stroke-linecap="round"/>
+    <path id="mapTrailPath" class="map-path-line" fill="none" stroke-linecap="round"/>
+    ${flowDot(9, 0, 1.6)}${flowDot(9, -3, 1.3)}${flowDot(9, -6, 1.1)}
+  </svg>`;
+
+  mapLazy = {
+    mode, y: 34, globalIdx: 0, points: [],
+    nextChapter: initialChapters + 1,
+    loading: false, done: initialChapters >= ceilingChapters,
+    scrollEl,
+    svgEl: track.querySelector('.map-path-svg'),
+    pathGlowEl: track.querySelector('.map-path-glow'),
+    pathLineEl: track.querySelector('#mapTrailPath'),
+  };
+
+  const currentNodeEl = appendMapBatch(track, mode, chaptersData);
+  scrollEl.addEventListener('scroll', onMapScroll, { passive: true });
+
   requestAnimationFrame(()=>{
     (currentNodeEl || track.lastElementChild)?.scrollIntoView({ block:'center', behavior:'smooth' });
+    onMapScroll(); // covers a viewport tall enough to already show the bottom on load
   });
 }
 
