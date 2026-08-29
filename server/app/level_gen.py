@@ -63,11 +63,15 @@ SIM_RANDOM_MOVE_CHANCE = 0.22   # fraction of moves a simulated "average player"
 # This build's documented content range. Not hand-authored rows — the
 # generator below is already unbounded and deterministic; this is the range
 # we're calling "released" for now, per the "scope in batches" plan. Raised
-# from 1000 to 1300 (300 more levels, across every mode) — the generator
-# itself needed no changes, just this number. js/content.js mirrors this
-# constant exactly, and js/screens.js's World Map reads it from there (not
-# a hardcoded copy) to decide how many chapters it's willing to reveal.
-CONTENT_CEILING_LEVELS = 1300
+# again, 1300 to 2000 (700 more levels, across every mode) — spot-checked
+# chapters up to 200 first and confirmed the generator degrades gracefully
+# with no hard tail dependency (_chapter_ease() already extrapolates past
+# CHAPTER_EASE_TABLE and plateaus at CHAPTER_EASE_CAP on its own), so this
+# is genuinely just the number, not a generator change. js/content.js
+# mirrors this constant exactly, and js/screens.js's World Map reads it
+# from there (not a hardcoded copy) to decide how many chapters it's
+# willing to reveal.
+CONTENT_CEILING_LEVELS = 2000
 
 # Stage-finale modifier axes (levels 13-15 of every chapter). Seeded per
 # (mode, chapter, slot), independent of each other, so combinations don't

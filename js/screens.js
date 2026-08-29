@@ -93,6 +93,7 @@ let timeRemaining = 0;
 let slowMoUntil = 0; // Date.now() timestamp — see Slow-Mo Sand in startTimer()
 let slowMoSkipNext = false;
 const IDLE_MS = 6000;
+const GEMS_EXPLAINER = '💎 Gems — earned by clearing levels and chapters (and mid-level bonuses like the Halo Bomb). Spend them on life refills and move continues.';
 
 /* ============================= SPLASH / LOADING ============================= */
 
@@ -152,10 +153,11 @@ function renderDashboard(){
   grid.innerHTML = `
     <div class="dash-tile"><div class="dv" id="dash-lives-val"></div><div class="dl">Lives</div>
       <div class="dsub" id="dash-lives-sub"></div></div>
-    <div class="dash-tile"><div class="dv">💎 ${rewards.getGems()}</div><div class="dl">Gems</div></div>
+    <button class="dash-tile" type="button" id="dash-gems-tile"><div class="dv">💎 ${rewards.getGems()}</div><div class="dl">Gems</div></button>
     <div class="dash-tile"><div class="dv">🔥 ${rewards.getDailyStatus().streak}</div><div class="dl">Daily Streak</div></div>
     <div class="dash-tile"><div class="dv">${rewards.isDailySessionDone() ? 'Done' : 'Open'}</div><div class="dl">Today's Blessing</div></div>
   `;
+  $('dash-gems-tile').addEventListener('click', ()=>showToast(GEMS_EXPLAINER, 2600));
   tickDashboardLives();
   const inv = $('dash-inventory');
   const items = rewards.getInventory();
@@ -651,11 +653,30 @@ function objectiveAreaHTML(level){
     <div class="progress-label"><span id="progress-current">0</span><span id="progress-target">Target ${level.target}</span></div></div>`;
 }
 
+// Gems previously had zero presence during actual play — only on the
+// Modes-screen status bar and Dashboard, screens you pass through rather
+// than live in. `pop` (true whenever this is a real mid-level gain, not
+// just the initial render) triggers a visible flourish on the pill itself
+// — the moment a gem lands should be something that visibly happens to
+// the number in front of you, not just a line of toast text elsewhere.
+function updateGemsHUD(pop){
+  const el = $('stat-gems');
+  if(!el) return;
+  el.textContent = `💎 ${rewards.getGems()}`;
+  if(pop){
+    const pill = $('stat-gems-pill');
+    pill.classList.remove('gem-pop');
+    void pill.offsetWidth; // restart the animation if it's already mid-play
+    pill.classList.add('gem-pop');
+  }
+}
+
 function renderGameChrome(level){
   const mode = modeById(level.mode) || { name:'Faith Match' };
   $('game-level-name').textContent = level.mode==='daily-blessing'
     ? "Today's Blessing" : `LEVEL ${level.index+1} · ${level.name}`;
   $('game-mode-name').textContent = level.finale ? `${mode.name} · Stage Finale` : mode.name;
+  updateGemsHUD(false);
 
   const task = taskDescriptionFor(level);
   const banner = $('task-banner');
@@ -1083,6 +1104,14 @@ async function runLevel(level){
   currentLevel = level;
   meterWasReady = false;
   showScreen('game');
+  // Fire the gameplay theme the instant the screen changes, not after the
+  // async WebGL board init below -- that await used to leave the outgoing
+  // screen's music (map/menu theme) playing untouched for ~1.5s over an
+  // already-visible, already-interactive board, then cut over abruptly.
+  // That gap is exactly what read as "it starts like it was just resumed"
+  // -- the audio and the visual "you're in the game now" moment need to
+  // land together, not audio catching up a beat and a half late.
+  audio.startAmbientPad(level.mode);
   renderGameChrome(level);
   // The world map shows every chapter's own accent color inline per-node;
   // gameplay itself still needs the single global --chapter-accent (board
@@ -1100,8 +1129,10 @@ async function runLevel(level){
     onOutOfMoves: offerContinue,
     // Halo Bomb's gem bonus lands immediately, mid-level — engine.js owns
     // the "chaos," not the persistent economy, so it hands the amount back
-    // here the same way score/toasts already flow out via callbacks.
-    onGemsEarned: (n)=>rewards.addGems(n),
+    // here the same way score/toasts already flow out via callbacks. The
+    // HUD pill updates and pops in the same tick, right here — not just a
+    // toast claiming it happened.
+    onGemsEarned: (n)=>{ rewards.addGems(n); updateGemsHUD(true); },
   });
 
   // Awaited: WebGL init + procedural tile textures are async on first use
@@ -1118,7 +1149,6 @@ async function runLevel(level){
   levelStartedAt = Date.now();
   startIdleLoop();
   startTimer(level);
-  audio.startAmbientPad(level.mode);
   if(level.finale) audio.playFinaleSting();
 }
 
@@ -1274,6 +1304,7 @@ function initNav(){
   $('btn-inventory').addEventListener('click', ()=>{ audio.playUiTap(); openTray(); });
   $('btn-tray-close').addEventListener('click', ()=>{ audio.playUiTap(); closeTray(); });
   $('btn-combo-meter').addEventListener('click', ()=>{ engine.popComboMeter(); });
+  $('stat-gems-pill').addEventListener('click', ()=>showToast(GEMS_EXPLAINER, 2600));
   $('btn-open-account').addEventListener('click', ()=>{ audio.playUiTap(); openAccountPanel(); });
   $('btn-profile-shortcut').addEventListener('click', (e)=>{ e.stopPropagation(); audio.playUiTap(); openAccountPanel(); });
   $('btn-account-close').addEventListener('click', ()=>{ audio.playUiTap(); closeAccountPanel(); });
@@ -1295,6 +1326,19 @@ function initNav(){
   engine.setPointerHandler(onBoardPointerDown);
   window.addEventListener('resize', ()=>{ engine.resizeBoard(); effects.resizeCanvas(); });
   window.addEventListener('orientationchange', ()=>{ engine.resizeBoard(); effects.resizeCanvas(); });
+  // Retry the music unlock on *every* tap in the app, not just the buttons
+  // that happen to call audio.playUiTap()/ensureAudio() themselves. On a
+  // real (non-instant) network, the very first "Begin" tap can lose its
+  // gesture-activation window before getMusic()'s async probe resolves
+  // (see audio.js's ensureAudio() comment) -- and mode-card / world-map
+  // taps (the actual next things a player touches) never called ensureAudio
+  // at all, so a lost first attempt used to just stay silently stuck off
+  // for the whole session unless the player happened to open Dashboard or
+  // Inventory. A capture-phase listener on every pointerdown means any tap,
+  // anywhere, is a fresh legitimate gesture that can retry it -- and
+  // ensureAudio() itself is already a cheap no-op once music is actually
+  // playing.
+  document.addEventListener('pointerdown', ()=>audio.ensureAudio(), { capture: true });
 }
 
 async function initScreens(){
