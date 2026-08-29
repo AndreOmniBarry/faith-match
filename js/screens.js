@@ -1104,6 +1104,14 @@ async function runLevel(level){
   currentLevel = level;
   meterWasReady = false;
   showScreen('game');
+  // Fire the gameplay theme the instant the screen changes, not after the
+  // async WebGL board init below -- that await used to leave the outgoing
+  // screen's music (map/menu theme) playing untouched for ~1.5s over an
+  // already-visible, already-interactive board, then cut over abruptly.
+  // That gap is exactly what read as "it starts like it was just resumed"
+  // -- the audio and the visual "you're in the game now" moment need to
+  // land together, not audio catching up a beat and a half late.
+  audio.startAmbientPad(level.mode);
   renderGameChrome(level);
   // The world map shows every chapter's own accent color inline per-node;
   // gameplay itself still needs the single global --chapter-accent (board
@@ -1141,7 +1149,6 @@ async function runLevel(level){
   levelStartedAt = Date.now();
   startIdleLoop();
   startTimer(level);
-  audio.startAmbientPad(level.mode);
   if(level.finale) audio.playFinaleSting();
 }
 
@@ -1319,6 +1326,19 @@ function initNav(){
   engine.setPointerHandler(onBoardPointerDown);
   window.addEventListener('resize', ()=>{ engine.resizeBoard(); effects.resizeCanvas(); });
   window.addEventListener('orientationchange', ()=>{ engine.resizeBoard(); effects.resizeCanvas(); });
+  // Retry the music unlock on *every* tap in the app, not just the buttons
+  // that happen to call audio.playUiTap()/ensureAudio() themselves. On a
+  // real (non-instant) network, the very first "Begin" tap can lose its
+  // gesture-activation window before getMusic()'s async probe resolves
+  // (see audio.js's ensureAudio() comment) -- and mode-card / world-map
+  // taps (the actual next things a player touches) never called ensureAudio
+  // at all, so a lost first attempt used to just stay silently stuck off
+  // for the whole session unless the player happened to open Dashboard or
+  // Inventory. A capture-phase listener on every pointerdown means any tap,
+  // anywhere, is a fresh legitimate gesture that can retry it -- and
+  // ensureAudio() itself is already a cheap no-op once music is actually
+  // playing.
+  document.addEventListener('pointerdown', ()=>audio.ensureAudio(), { capture: true });
 }
 
 async function initScreens(){

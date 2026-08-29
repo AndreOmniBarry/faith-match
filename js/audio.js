@@ -28,6 +28,15 @@ const sfxCache = new Map();
 const musicPending = new Map();
 const sfxPending = new Map();
 let currentMusic = null; // { key, el }
+// The key a switchMusic() call is *waiting* on a still-in-flight probe for,
+// as opposed to currentMusic (which only reflects an already-resolved
+// switch). Without this, several switchMusic() calls for the same key
+// arriving before the first one's probe resolves -- routine now that
+// ensureAudio() retries on every tap (see screens.js's pointerdown
+// listener) -- would each queue their own callback behind the shared
+// probe, and every one of them would fire once it resolves: the same
+// track gets .play()'d and fadeTo()'d several times back to back.
+let pendingSwitchKey = null;
 
 function probe(baseUrl, onReady){
   // Try each extension in turn; resolve to a ready <audio> element, or
@@ -180,13 +189,16 @@ function switchMusic(key, { volume = 0.35, fadeMs = 600 } = {}){
   // of the original fix for "stuck silent after a blocked autoplay" is
   // unchanged.
   if(currentMusic && currentMusic.key === key) return;
+  if(pendingSwitchKey === key) return;
   const prev = currentMusic;
   currentMusic = null;
   if(prev){
     fadeTo(prev.el, 0, fadeMs, () => { prev.el.pause(); prev.el.currentTime = 0; });
   }
   if(!soundOn) return;
+  pendingSwitchKey = key;
   getMusic(key, (el) => {
+    if(pendingSwitchKey === key) pendingSwitchKey = null;
     if(!el) return;
     el.loop = true;
     el.volume = 0;
