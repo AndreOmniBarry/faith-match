@@ -34,13 +34,20 @@ function showScreen(name){
   Object.values(screens).forEach(s=>s.classList.add('hidden'));
   screens[name].classList.remove('hidden');
   audio.playScreenIn();
-  // Every non-game, non-map screen shares the menu theme; the World Map
-  // gets its own dedicated track; runLevel() takes over with the
-  // per-mode gameplay loop once a level actually starts. This naturally
-  // resumes the right theme on any way back out without each nav handler
-  // needing to know about audio.
-  if(name === 'map') audio.playMapTheme();
-  else if(name !== 'game') audio.playMenuTheme();
+  // Every non-game screen -- splash included -- now shares the same track
+  // as the World Map. Splash used to play its own separate theme-main, but
+  // that meant the one song players actually noticed and liked (theme-map,
+  // heard on "Charting the path…" and the map itself) was silent on the
+  // very first screen -- and since splash necessarily can't make a sound
+  // before the first tap (no browser allows audio before a user gesture,
+  // full stop) and navigates away the instant "Begin" is tapped, a
+  // splash-only track never really got heard as "the splash screen's
+  // song" anyway. One shared track means it's already playing, not
+  // restarting, by the time the player reaches the map -- switchMusic()'s
+  // same-key guard makes splash -> loading -> modes -> map one continuous
+  // cue instead of a re-fade at every stop. runLevel() still takes over
+  // with the per-mode gameplay loop once a level actually starts.
+  if(name !== 'game') audio.playMapTheme();
   if(name === 'dashboard') startDashboardClock(); else stopDashboardClock();
   if(name === 'splash') splashFx.start(); else splashFx.stop();
 }

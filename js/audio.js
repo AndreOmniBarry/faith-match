@@ -73,9 +73,9 @@ function getCached(dir, cache, pending, key, cb){
 function getMusic(key, cb){ getCached(MUSIC_DIR, musicCache, musicPending, key, cb); }
 function getSfx(key, cb){ getCached(SFX_DIR, sfxCache, sfxPending, key, cb); }
 
-// Warm the menu theme into the cache as soon as this module loads — a
-// silent network preload, no playback. By the time the player actually
-// taps "Begin" (at least a second or two later), the element is already
+// Warm theme-map into the cache as soon as this module loads — a silent
+// network preload, no playback. By the time the player actually taps
+// "Begin" (at least a second or two later), the element is already
 // resolved, so getMusic()'s cache-hit branch below returns *synchronously*
 // and ensureAudio() can call .play() within that same click's call stack.
 // That's the fix for "had to toggle sound off/on before it started
@@ -85,7 +85,10 @@ function getSfx(key, cb){ getCached(SFX_DIR, sfxCache, sfxPending, key, cb); }
 // callback) landed too late to still count as gesture-initiated. Toggling
 // sound worked because it calls .play() directly on an already-loaded
 // cached element — this makes the very first tap behave the same way.
-getMusic('theme-main', () => {});
+// theme-map specifically (not theme-main) because every non-game screen —
+// splash included — now shares that one track (see screens.js's
+// showScreen()), so this is the track ensureAudio() actually needs warm.
+getMusic('theme-map', () => {});
 
 function setSoundEnabled(v){
   soundOn = v;
@@ -101,9 +104,13 @@ function ensureAudio(){
   // Call from a real user-gesture handler (first tap) — some browsers
   // (iOS Safari in particular) refuse to play any audio, even muted,
   // until playback has been kicked off inside a click/tap event. Starting
-  // the actual menu theme here (rather than a throwaway silent element)
-  // both unlocks audio and gets the music going immediately, with no
-  // second interaction needed.
+  // the actual theme here (rather than a throwaway silent element) both
+  // unlocks audio and gets the music going immediately, with no second
+  // interaction needed. Targets playMapTheme() (not playMenuTheme()), same
+  // as every screen now does — so this first unlock and showScreen()'s own
+  // call right after it resolve to the same track and switchMusic()'s
+  // same-key guard makes it a no-op the second time, instead of unlocking
+  // into one track and immediately re-fading into another.
   if(unlocked){
     // Already unlocked, but the very first attempt can still have lost its
     // gesture-activation window silently: getMusic()'s probe is async, and
@@ -114,11 +121,11 @@ function ensureAudio(){
     // bug this session's near-instant localhost tests never hit. Any
     // later real tap is itself a fresh gesture, so retry here rather than
     // leaving music silently stuck off for the rest of the session.
-    if(soundOn && !currentMusic) playMenuTheme();
+    if(soundOn && !currentMusic) playMapTheme();
     return;
   }
   unlocked = true;
-  playMenuTheme();
+  playMapTheme();
 }
 
 function playSfx(key, { volume = 0.55 } = {}){
@@ -178,7 +185,7 @@ function switchMusic(key, { volume = 0.35, fadeMs = 600 } = {}){
   // Skip re-triggering whenever that track is already current — whether
   // its play() has *confirmed* yet or is still pending, not just once
   // confirmed. Screen transitions fire this back-to-back synchronously
-  // (splash -> loading -> modes each call playMenuTheme() on the way),
+  // (splash -> loading -> modes -> map each call playMapTheme() on the way),
   // and before this guard covered the pending state too, the second call
   // would land while the first's play() promise hadn't resolved yet,
   // treat itself as a fresh switch, and restart a competing fade-out (with
@@ -229,10 +236,12 @@ function stopAmbientPad(){
   currentMusic = null;
   fadeTo(prev.el, 0, 500, () => { prev.el.pause(); prev.el.currentTime = 0; });
 }
+// Kept for any external caller that still wants the old, splash-only
+// track — nothing in this app calls it anymore (see playMapTheme below).
 function playMenuTheme(){ switchMusic('theme-main', { volume: 0.3 }); }
-// The World Map gets its own dedicated track (theme-map) distinct from
-// the shared menu theme — falls back to the regular menu theme if that
-// file isn't present.
+// Every non-game screen shares this one track now, splash included — see
+// screens.js's showScreen() and ensureAudio() above. Falls back to
+// theme-main if theme-map isn't present.
 function playMapTheme(){
   getMusic('theme-map', (el) => {
     switchMusic(el ? 'theme-map' : 'theme-main', { volume: 0.3 });
