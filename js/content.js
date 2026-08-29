@@ -10,8 +10,10 @@
 import { fetchLevel, fetchChapter, fetchDaily } from './api.js';
 
 // This build's documented content range — see server/app/level_gen.py for
-// why this isn't hand-authored rows. Must match the server exactly.
-const CONTENT_CEILING_LEVELS = 2000;
+// why this isn't hand-authored rows, and why 100000 is a practical
+// "effectively endless" safety bound rather than a real limit. Must match
+// the server exactly.
+const CONTENT_CEILING_LEVELS = 100000;
 
 const SYMBOLS = [
   { emoji:'✝️', color:'var(--c-cross)', name:'Cross' },

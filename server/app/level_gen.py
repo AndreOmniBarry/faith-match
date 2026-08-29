@@ -63,15 +63,22 @@ SIM_RANDOM_MOVE_CHANCE = 0.22   # fraction of moves a simulated "average player"
 # This build's documented content range. Not hand-authored rows — the
 # generator below is already unbounded and deterministic; this is the range
 # we're calling "released" for now, per the "scope in batches" plan. Raised
-# again, 1300 to 2000 (700 more levels, across every mode) — spot-checked
-# chapters up to 200 first and confirmed the generator degrades gracefully
-# with no hard tail dependency (_chapter_ease() already extrapolates past
-# CHAPTER_EASE_TABLE and plateaus at CHAPTER_EASE_CAP on its own), so this
-# is genuinely just the number, not a generator change. js/content.js
-# mirrors this constant exactly, and js/screens.js's World Map reads it
-# from there (not a hardcoded copy) to decide how many chapters it's
-# willing to reveal.
-CONTENT_CEILING_LEVELS = 2000
+# again, 1300 to 2000, then to 100000 -- get_level()/get_chapter() were
+# never actually bounded by this constant (no ceiling check exists in
+# either function or in main.py's routes beyond index >= 0); it's purely
+# a scope number the World Map used to size itself against. Confirmed
+# stable and fast (~30ms/level, ~0.4s/chapter cold, then lru_cache-hit)
+# all the way out to chapter 3334 / index 50000 -- _chapter_ease() plateaus
+# at CHAPTER_EASE_CAP with no tail dependency, same as the 1300->2000 bump.
+# 100000 is a practical "effectively endless" bound (no player will ever
+# grind to it) rather than a real limit -- paired with the World Map now
+# lazily loading more chapters as the player nears the bottom of the trail
+# (see renderWorldMap in js/screens.js) instead of pre-rendering a fixed
+# small batch and just stopping, which is what previously made the map
+# read as closing after a few chapters. js/content.js mirrors this
+# constant exactly, and js/screens.js's World Map reads it from there (not
+# a hardcoded copy) as its lazy-load safety ceiling.
+CONTENT_CEILING_LEVELS = 100000
 
 # Stage-finale modifier axes (levels 13-15 of every chapter). Seeded per
 # (mode, chapter, slot), independent of each other, so combinations don't

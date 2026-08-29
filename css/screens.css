@@ -118,10 +118,15 @@
 }
 
 /* ============================= MODE SELECT ============================= */
-.modes-header{width:100%; text-align:center; margin-bottom:8px;}
+.modes-header{width:100%; text-align:center; margin-bottom:6px;}
 .modes-header h2{font-size:24px; color:var(--gold-soft);}
 .modes-header p{font-size:13px; color:#b7a9d9; margin-top:6px;}
-.mode-list{width:100%; margin-top:20px; display:flex; flex-direction:column; gap:14px;}
+/* margin-top/gap trimmed from 20px/14px -- with the shell now locked to
+   the viewport (see base.css) and nothing but the World Map allowed to
+   scroll, all 4 mode cards + the status row need to actually fit on a
+   short real device (iPhone SE-class, 667px tall) instead of the last
+   card's badge line quietly clipping off the bottom. */
+.mode-list{width:100%; margin-top:12px; display:flex; flex-direction:column; gap:10px;}
 .mode-card{
   position:relative; width:100%; text-align:left;
   display:flex; align-items:center; gap:14px;
@@ -243,11 +248,14 @@
 .back-row{width:100%; display:flex; justify-content:flex-start; align-items:center; gap:10px;}
 .back-row .crumb{font-size:12px; color:#9c8fc3; letter-spacing:.06em; text-transform:uppercase;}
 
-/* One continuous, page-scrolling trail through every chapter of a mode —
-   .map-track's height is set inline (js/screens.js) to fit every node, and
-   the page itself scrolls (body has no overflow clip), so this is a real
-   long-form scrollable map rather than a paged grid. */
-.map-scroll{ width:100%; margin-top:18px; }
+/* One continuous trail through every chapter of a mode -- .map-track's
+   height is set inline (js/screens.js) to fit every node. This is the one
+   screen in the app meant to scroll at all (see base.css's shell lock):
+   .map-scroll fills whatever vertical space #screen-map has left after its
+   header and is the actual scroll container, not the page/body. More
+   chapters are appended to .map-track as the player nears the bottom (see
+   renderWorldMap's scroll listener) so the trail never just runs out. */
+.map-scroll{ width:100%; margin-top:18px; flex:1; min-height:0; overflow-y:auto; -webkit-overflow-scrolling:touch; overscroll-behavior:contain; }
 .map-track{ position:relative; width:100%; }
 
 /* Each chapter's own stretch of atmosphere — without this the whole trail
