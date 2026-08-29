@@ -181,7 +181,7 @@ function fadeTo(el, target, ms, onDone){
   requestAnimationFrame(step);
 }
 
-function switchMusic(key, { volume = 0.35, fadeMs = 600 } = {}){
+function switchMusic(key, { volume = 0.35, fadeMs = 600, fallbackKey = null } = {}){
   // Skip re-triggering whenever that track is already current — whether
   // its play() has *confirmed* yet or is still pending, not just once
   // confirmed. Screen transitions fire this back-to-back synchronously
@@ -206,7 +206,24 @@ function switchMusic(key, { volume = 0.35, fadeMs = 600 } = {}){
   pendingSwitchKey = key;
   getMusic(key, (el) => {
     if(pendingSwitchKey === key) pendingSwitchKey = null;
-    if(!el) return;
+    if(!el){
+      // The file just isn't there yet — try the fallback track (still just
+      // one more getMusic hop, only on this cold path, not the common one).
+      // Deliberately NOT the structure this replaced: that wrapped every
+      // switchMusic() call in its own *outer* getMusic() first and only
+      // called switchMusic() from inside that callback, doubling the async
+      // hop between a tap and the actual .play() call on every single
+      // call, not just a missing-file one. Chromium's autoplay policy
+      // tolerated that fine in testing, but it's exactly the kind of gap
+      // stricter mobile browsers (iOS Safari in particular, which requires
+      // play() to land essentially synchronously inside the gesture) don't
+      // forgive — which is what silenced every non-gameplay track (splash
+      // included) after that structure shipped. This keeps the common,
+      // file-present path at the same single getMusic hop playMenuTheme()
+      // and startAmbientPad()'s own fallback-free calls already use.
+      if(fallbackKey) switchMusic(fallbackKey, { volume, fadeMs });
+      return;
+    }
     el.loop = true;
     el.volume = 0;
     const rec = { key, el, confirmed: false };
@@ -222,13 +239,8 @@ function switchMusic(key, { volume = 0.35, fadeMs = 600 } = {}){
 // theme file (theme-<mode>.mp3) if present, else fall back to the
 // shared gameplay loop (theme-gameplay.mp3).
 function startAmbientPad(mode){
-  if(mode){
-    getMusic(`theme-${mode}`, (el) => {
-      switchMusic(el ? `theme-${mode}` : 'theme-gameplay');
-    });
-  } else {
-    switchMusic('theme-gameplay');
-  }
+  if(mode) switchMusic(`theme-${mode}`, { fallbackKey: 'theme-gameplay' });
+  else switchMusic('theme-gameplay');
 }
 function stopAmbientPad(){
   if(!currentMusic) return;
@@ -242,11 +254,7 @@ function playMenuTheme(){ switchMusic('theme-main', { volume: 0.3 }); }
 // Every non-game screen shares this one track now, splash included — see
 // screens.js's showScreen() and ensureAudio() above. Falls back to
 // theme-main if theme-map isn't present.
-function playMapTheme(){
-  getMusic('theme-map', (el) => {
-    switchMusic(el ? 'theme-map' : 'theme-main', { volume: 0.3 });
-  });
-}
+function playMapTheme(){ switchMusic('theme-map', { volume: 0.3, fallbackKey: 'theme-main' }); }
 
 function vibrate(pattern){ try{ if(navigator.vibrate) navigator.vibrate(pattern); }catch(e){} }
 
