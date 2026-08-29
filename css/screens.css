@@ -363,6 +363,17 @@
 }
 .stat-pill .val{font-family:var(--font-display); font-size:17px; color:var(--gold-soft); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
 .stat-pill .lbl{font-size:9.5px; letter-spacing:.06em; text-transform:uppercase; color:#9c8fc3; margin-top:1px;}
+/* A real gem landing mid-level (Halo Bomb's bonus) previously only ever
+   showed up as a line of text in a toast — the total itself never visibly
+   moved anywhere you could actually be looking. This pop is what makes
+   "you just got gems" land as something that happened to the number on
+   screen, not just something a sentence claimed. */
+.stat-pill.gem-pop{ animation:gemPop .5s ease; border-color:var(--gold); }
+@keyframes gemPop{
+  0%{ transform:scale(1); box-shadow:none; }
+  35%{ transform:scale(1.18); box-shadow:0 0 14px color-mix(in srgb, var(--gold) 55%, transparent); }
+  100%{ transform:scale(1); box-shadow:none; }
+}
 /* Plain-English task reminder — was previously nothing but a raw number
    ("Target 3800") with no sentence explaining what to actually do. Sits
    above the objective's own progress bar so it's visible the whole level,
