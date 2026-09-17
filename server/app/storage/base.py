@@ -33,6 +33,15 @@ class StorageError(RuntimeError):
     a 503 (try again), never a 500, because nothing is actually broken."""
 
 
+class StorageConfigurationError(StorageError):
+    """The store can never work as configured: a driver that isn't
+    installed, a malformed connection string. Also a 503 — the service
+    genuinely can't serve these routes — but told apart from the transient
+    case because the answer is different. "Try again in a moment" is
+    actively wrong advice for a deployment that needs a person to change
+    something; no amount of retrying installs a driver."""
+
+
 class UsernameTaken(Exception):
     """Raised by create_player() instead of leaking a driver-specific
     integrity error up into account.py — the caller wants "409", not

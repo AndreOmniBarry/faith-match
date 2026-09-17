@@ -22,7 +22,10 @@ from __future__ import annotations
 import logging
 import threading
 
-from .storage import Store, StorageError, UsernameTaken, create_store, database_url, is_serverless
+from .storage import (
+    Store, StorageConfigurationError, StorageError, UsernameTaken,
+    create_store, database_url, is_serverless,
+)
 
 log = logging.getLogger("faithmatch.db")
 
@@ -123,5 +126,6 @@ def reset_for_tests(store: Store | None) -> None:
 
 __all__ = [
     "get_store", "is_available", "require_store", "init_schema", "ensure_schema",
-    "describe", "reset_for_tests", "StorageError", "UsernameTaken", "database_url",
+    "describe", "reset_for_tests", "StorageError", "StorageConfigurationError",
+    "UsernameTaken", "database_url",
 ]

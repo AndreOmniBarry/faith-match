@@ -50,7 +50,7 @@ from .daily import get_daily
 from .level_gen import CHAPTER_EASE_TABLE, CHAPTER_SIZE, CONTENT_CEILING_LEVELS, get_chapter, get_level
 from .models import AnalyticsEvent, LoginRequest, RegisterRequest, ScoreSubmission, SyncRequest
 from .scoring import stars_for, validate_score
-from .storage import StorageError, is_serverless
+from .storage import StorageConfigurationError, StorageError, is_serverless
 
 log = logging.getLogger("faithmatch")
 
@@ -91,9 +91,26 @@ app.add_middleware(
 
 @app.exception_handler(StorageError)
 async def _storage_error_handler(_: Request, exc: StorageError) -> JSONResponse:
-    """A configured database that's momentarily unreachable is a 503, not a
-    500 — the client should retry, and a monitoring dashboard should show
-    "dependency down", not "application bug"."""
+    """A configured database that can't be reached is a 503, not a 500 — the
+    dependency is down, the application isn't broken.
+
+    The two cases get different words because they need different actions.
+    A dropped connection or a database still waking up really does clear on
+    a retry. A driver that isn't installed never will, and telling a player
+    to "try again in a moment" about it sends them into a loop while hiding
+    from whoever runs the deployment that something needs changing. The
+    exact cause goes to the log either way; the player gets a sentence
+    that's true.
+    """
+    if isinstance(exc, StorageConfigurationError):
+        log.error("storage misconfigured — this will not fix itself: %s", exc)
+        return JSONResponse(
+            status_code=503,
+            content={"detail": (
+                "Player profiles and leaderboards aren't available on this deployment — its "
+                "database isn't set up correctly. Your progress is still saved on this device."
+            )},
+        )
     log.warning("storage unavailable: %s", exc)
     return JSONResponse(
         status_code=503,

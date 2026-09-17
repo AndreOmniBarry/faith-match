@@ -59,6 +59,12 @@ running many instances, and each one keeps its own small pool
 the ceiling that matters is the database's, and a pooler is what keeps that
 comfortable.
 
+Connect and pool-wait timeouts default to 5s each
+(`FAITHMATCH_DB_CONNECT_TIMEOUT`, `FAITHMATCH_DB_POOL_TIMEOUT`). They are
+deliberately shorter than the client's own 8s patience for an account
+request: a server still dialling a dead database after the client has
+given up is billing serverless time for an answer nobody will read.
+
 ### What degrades, and what doesn't
 
 Everything that needs no database keeps working on any deployment: level

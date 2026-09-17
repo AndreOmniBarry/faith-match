@@ -19,7 +19,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from .base import Store, StorageError, UsernameTaken
+from .base import Store, StorageConfigurationError, StorageError, UsernameTaken
 from .postgres_store import PostgresStore
 from .sqlite_store import SqliteStore
 
@@ -67,7 +67,7 @@ def create_store(env: dict | None = None) -> Store | None:
 
 
 __all__ = [
-    "Store", "StorageError", "UsernameTaken",
+    "Store", "StorageError", "StorageConfigurationError", "UsernameTaken",
     "PostgresStore", "SqliteStore",
     "create_store", "database_url", "is_serverless", "DEFAULT_SQLITE_PATH",
 ]

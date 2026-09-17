@@ -28,7 +28,7 @@ import os
 import threading
 from contextlib import contextmanager
 
-from .base import Store, StorageError
+from .base import Store, StorageConfigurationError, StorageError
 
 # psycopg 3. Imported lazily in _pool() rather than at module import, so a
 # deployment that runs on SQLite (local dev) doesn't need the driver
@@ -37,8 +37,14 @@ from .base import Store, StorageError
 # startup — level generation and the daily challenge keep working.
 
 DEFAULT_MAX_CONNECTIONS = 4
-DEFAULT_CONNECT_TIMEOUT = 10  # seconds
-DEFAULT_POOL_TIMEOUT = 10     # seconds to wait for a free connection
+# Fail fast, deliberately. js/account.js gives up on an account request
+# after 8s, so a server that spends longer than that dialling a dead
+# database is billing serverless time to produce an answer nobody is still
+# listening for. Five seconds is comfortably longer than a healthy connect
+# (single-digit milliseconds warm, a few hundred through a pooler on a cold
+# database) and comfortably shorter than the client's patience.
+DEFAULT_CONNECT_TIMEOUT = 5  # seconds to establish a new connection
+DEFAULT_POOL_TIMEOUT = 5     # seconds to wait for a free connection
 
 SCHEMA = [
     """
@@ -97,10 +103,17 @@ SCHEMA = [
 class PostgresStore(Store):
     name = "postgres"
 
-    def __init__(self, dsn: str, max_connections: int | None = None):
+    def __init__(self, dsn: str, max_connections: int | None = None,
+                 pool_timeout: float | None = None, connect_timeout: float | None = None):
         self.dsn = dsn
         self.max_connections = max_connections or int(
             os.environ.get("FAITHMATCH_DB_MAX_CONNECTIONS", DEFAULT_MAX_CONNECTIONS)
+        )
+        self.pool_timeout = pool_timeout if pool_timeout is not None else float(
+            os.environ.get("FAITHMATCH_DB_POOL_TIMEOUT", DEFAULT_POOL_TIMEOUT)
+        )
+        self.connect_timeout = connect_timeout if connect_timeout is not None else float(
+            os.environ.get("FAITHMATCH_DB_CONNECT_TIMEOUT", DEFAULT_CONNECT_TIMEOUT)
         )
         self._pool = None
         self._pool_lock = threading.Lock()
@@ -111,8 +124,8 @@ class PostgresStore(Store):
         try:
             from psycopg.rows import dict_row
             from psycopg_pool import ConnectionPool
-        except ImportError as exc:  # pragma: no cover - deployment misconfiguration
-            raise StorageError(
+        except ImportError as exc:
+            raise StorageConfigurationError(
                 "DATABASE_URL is set but the PostgreSQL driver isn't installed "
                 "(pip install 'psycopg[binary,pool]')."
             ) from exc
@@ -121,8 +134,8 @@ class PostgresStore(Store):
             self.dsn,
             min_size=0,
             max_size=self.max_connections,
-            timeout=DEFAULT_POOL_TIMEOUT,
-            kwargs={"row_factory": dict_row, "connect_timeout": DEFAULT_CONNECT_TIMEOUT},
+            timeout=self.pool_timeout,
+            kwargs={"row_factory": dict_row, "connect_timeout": self.connect_timeout},
             # Verify a connection is still alive before handing it out. A
             # serverless instance can sit idle for minutes between requests,
             # long enough for the database (or the pgbouncer in front of it)
