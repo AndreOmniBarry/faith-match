@@ -104,6 +104,35 @@ const CHAPTER_EASE_TAIL_STEP = 0.015;
 const CHAPTER_EASE_CAP = 1.45;
 const FINALE_EASE_BUMP = 0.15;
 const MIN_MOVES_FLOOR = 10; // absolute floor, independent of ease — see level_gen.py's DAILY bug postmortem
+const VEIL_DENSITY_CEILING = 0.22; // most of the board a veil field may cover, before *and* after easing
+
+// Offline stand-ins for the server's simulated collect/veil goals.
+//
+// The server reads those goals off Monte Carlo playouts (level_gen.py's
+// _collect_ladder / _veil_ladder). There are no playouts here, and the goals
+// do not reduce to a formula: a veil goal turns mostly on *which* cells a
+// level veils, and fitting the calibrated numbers by board shape alone leaves
+// an error of 4 pieces on a collect goal and 6 veils on a veil goal — on
+// goals whose real values run from 3 to 23.
+//
+// So these deliberately aim low instead of aiming close. Offline is the
+// degraded path, and the two ways of being wrong are not equally bad: a goal
+// set under the calibrated one is a level that plays a little generously,
+// while a goal set over it is the level nobody can finish that this whole
+// change exists to remove. Both are checked against the simulator by
+// server/tools/goal_report.py offline.
+const OFFLINE_COLLECT_PER_MOVE = 2.8;  // pieces of one chased symbol per move, split over the palette
+const OFFLINE_VEIL_PER_MOVE = 0.28;    // veils freed per move, halved again per extra layer
+
+function offlineCollectGoal(moves, colors){
+  return Math.max(3, Math.round(OFFLINE_COLLECT_PER_MOVE * moves / colors) - 1);
+}
+function offlineVeilRequired(moves, cells){
+  if(!cells.length) return 0;
+  const layers = Math.max(1, ...cells.map(c=>c[2]));
+  const asked = Math.round(OFFLINE_VEIL_PER_MOVE * moves / layers);
+  return Math.max(1, Math.min(cells.length, Math.max(2, asked)));
+}
 function chapterEase(chapter){
   if(CHAPTER_EASE_TABLE[chapter] != null) return CHAPTER_EASE_TABLE[chapter];
   if(chapter < 1) return CHAPTER_EASE_TABLE[1];
@@ -129,24 +158,34 @@ function curveShape(index){
   if(index % BREATHER_EVERY === 0 && index > 0) moves += 2;
   moves = Math.max(13, moves);
   // Floored at 0.08, not 0 — see server/app/level_gen.py for why.
-  const veilDensity = Math.min(0.22, 0.08 + index*0.0035);
+  const veilDensity = Math.min(VEIL_DENSITY_CEILING, 0.08 + index*0.0035);
   return { rows, cols, colors, moves, veilDensity };
 }
 function easeShape(shape, ease){
   return {
     ...shape,
     moves: Math.max(MIN_MOVES_FLOOR, Math.round(shape.moves * (2 - ease))),
-    veilDensity: Math.round(shape.veilDensity * ease * 10000) / 10000,
+    // Clamped back to the ceiling after easing, same as level_gen.py: ease
+    // climbs to 1.45, which used to push the density to 0.32 and freeze a
+    // third of the board into segments nothing falls through.
+    veilDensity: Math.round(Math.min(VEIL_DENSITY_CEILING, shape.veilDensity * ease) * 10000) / 10000,
   };
 }
-function veilCellsFor(shape, rng, density){
+// `exclude` keeps a finale's extra veils off cells the base field already
+// veiled: the two lists could otherwise name the same cell twice, and the
+// level then counted more veils than the board holds — which, now that a veil
+// goal is a count of veils to free, is the difference between a hard level and
+// an unwinnable one. Mirrors _place_veils() in server/app/level_gen.py.
+function veilCellsFor(shape, rng, density, exclude){
   const cells = [];
   for(let r=0;r<shape.rows;r++) for(let c=0;c<shape.cols;c++) cells.push([r,c]);
-  const shuffled = seededShuffle(cells, rng);
+  let shuffled = seededShuffle(cells, rng);
   const n = Math.round(cells.length * density);
+  if(exclude && exclude.size) shuffled = shuffled.filter(([r,c])=>!exclude.has(r+','+c));
   const layers = density < 0.14 ? 1 : 2;
   return shuffled.slice(0,n).map(([r,c])=>[r,c,layers]);
 }
+const veilCellKeys = (cells)=>new Set((cells||[]).map(c=>c[0]+','+c[1]));
 
 function applyFinale(level, shape, mods, rng){
   level.finalePiece = mods.piece;
@@ -154,8 +193,9 @@ function applyFinale(level, shape, mods, rng){
   level.finale = true;
 
   if(mods.piece==='lockedChain'){
-    const extra = veilCellsFor(shape, rng, 0.10);
-    level.veil = { cells: (level.veil?.cells||[]).concat(extra) };
+    const existing = level.veil?.cells||[];
+    const extra = veilCellsFor(shape, rng, 0.10, veilCellKeys(existing));
+    level.veil = { ...(level.veil||{}), cells: existing.concat(extra) };
   }else if(mods.piece==='doublePoints'){
     level.bonusMultiplier = 2.0;
   }else if(mods.piece==='shrinking'){
@@ -168,8 +208,9 @@ function applyFinale(level, shape, mods, rng){
 
   if(mods.constraint==='tighterMoves') level.moves = Math.max(MIN_MOVES_FLOOR, Math.round(level.moves*0.85));
   else if(mods.constraint==='hazardTile'){
-    const extra = veilCellsFor(shape, rng, 0.08);
-    level.veil = { cells: (level.veil?.cells||[]).concat(extra) };
+    const existing = level.veil?.cells||[];
+    const extra = veilCellsFor(shape, rng, 0.08, veilCellKeys(existing));
+    level.veil = { ...(level.veil||{}), cells: existing.concat(extra) };
   }else if(mods.constraint==='raisedTarget') level.target = Math.round(level.target*1.4);
   else if(mods.constraint==='moreColors') level.colors = Math.min(SYMBOLS.length, level.colors+1);
 }
@@ -202,11 +243,16 @@ function localFallbackLevel(mode, index){
 
   if(objective === 'collect'){
     const kinds = seededShuffle([...Array(shape.colors).keys()], rng).slice(0,2);
-    const base = 14 + Math.min(24, Math.floor(index/3));
-    level.collect = kinds.map(k=>({ type:k, count: base + Math.floor(rng()*5)-2 }));
+    // Was `14 + min(24, index/3)`, which climbed to 38 and stayed there while
+    // the move budget fell to 10 — by level 300 it asked for 40 of a symbol a
+    // simulated player gathers 6 of. See offlineCollectGoal above.
+    const goal = offlineCollectGoal(shape.moves, shape.colors);
+    const jitter = Math.round(goal * 0.08);
+    level.collect = kinds.map(k=>({ type:k, count: Math.max(3, goal + (Math.floor(rng()*3)-1)*jitter) }));
     level.target = Math.round(target*0.6);
   }else if(objective === 'veil'){
-    level.veil = { cells: veilCellsFor(shape, rng, shape.veilDensity) };
+    const cells = veilCellsFor(shape, rng, shape.veilDensity);
+    level.veil = { cells, required: offlineVeilRequired(shape.moves, cells) };
   }
 
   if(isFinale){
@@ -216,6 +262,19 @@ function localFallbackLevel(mode, index){
     const mods = { piece:pickFrom(FINALE_PIECES,modRng), task:pickFrom(FINALE_TASKS,modRng),
       skin:pickFrom(FINALE_SKINS,modRng), constraint:pickFrom(FINALE_CONSTRAINTS,modRng) };
     applyFinale(level, shape, mods, rng);
+    // A finale tightens moves, widens the palette and can layer extra veils
+    // on, so the goal is recalibrated on the board the finale actually ships
+    // — same reason as get_level() in server/app/level_gen.py.
+    if(objective === 'collect' && level.collect){
+      const goal = offlineCollectGoal(level.moves, level.colors);
+      const jitter = Math.round(goal * 0.08);
+      level.collect = level.collect.map((req,i)=>({
+        type: req.type,
+        count: Math.max(3, goal + ((i % 3) - 1) * jitter),
+      }));
+    }else if(objective === 'veil' && level.veil){
+      level.veil.required = offlineVeilRequired(level.moves, level.veil.cells);
+    }
   }
   return level;
 }
@@ -322,4 +381,8 @@ async function getDaily(){
 export {
   SYMBOLS, MODES, modeById, CHAPTER_SIZE, CONTENT_CEILING_LEVELS,
   getLevel, getChapter, getDaily,
+  // Exported for server/tools/dump_offline_levels.mjs, which feeds these
+  // levels to the simulator so the offline goals are held to the same
+  // "no unwinnable level" bar as the calibrated ones.
+  localFallbackLevel,
 };

@@ -699,6 +699,16 @@ function backToMap(modeId){
 // during play. Reuses the level's own real data (target/collect/veil/
 // timedSeconds), not a generic placeholder, so it's accurate for every
 // mode and finale variant.
+// Mirrors engine.js's veilRequiredCount(): the server calibrates how many of
+// a level's veils have to be freed, and a level without that field (an older
+// cached one) means the original "free every one of them".
+function veilRequiredFor(level){
+  const n = level.veil?.cells?.length || 0;
+  const asked = level.veil?.required;
+  if(!(asked > 0)) return n;
+  return Math.max(1, Math.min(n, asked));
+}
+
 function taskDescriptionFor(level){
   const movesTxt = `${level.moves} move${level.moves===1?'':'s'}`;
   let sentence;
@@ -710,7 +720,9 @@ function taskDescriptionFor(level){
     sentence = `Collect ${list} within ${movesTxt}.`;
   }else if(level.objective==='veil'){
     const n = level.veil?.cells?.length || 0;
-    sentence = `Free all ${n} veiled tile${n===1?'':'s'} — match beside a veiled tile to crack it, within ${movesTxt}.`;
+    const need = veilRequiredFor(level);
+    const what = need >= n ? `all ${n} veiled tile${n===1?'':'s'}` : `${need} of the ${n} veiled tiles`;
+    sentence = `Free ${what} — match beside a veiled tile to crack it, within ${movesTxt}.`;
   }else{
     sentence = `Score ${level.target}+ points within ${movesTxt}.`;
   }
@@ -727,7 +739,7 @@ function objectiveAreaHTML(level){
   }
   if(level.objective==='veil'){
     return `<div class="progress-wrap"><div class="progress-track"><div class="progress-fill" id="progress-fill"></div></div>
-      <div class="progress-label"><span id="progress-current">0 freed</span><span id="progress-target">of ${level.veil?.cells?.length||0}</span></div></div>`;
+      <div class="progress-label"><span id="progress-current">0 freed</span><span id="progress-target">of ${veilRequiredFor(level)}</span></div></div>`;
   }
   return `<div class="progress-wrap"><div class="progress-track"><div class="progress-fill" id="progress-fill"></div></div>
     <div class="progress-label"><span id="progress-current">0</span><span id="progress-target">Target ${level.target}</span></div></div>`;
@@ -820,11 +832,15 @@ function updateHUD(s){
     if(fill) fill.style.width = Math.min(100, Math.round((s.score/Math.max(1,s.target))*100)) + '%';
     if(cur) cur.textContent = s.score;
   }else if(s.objective==='veil'){
+    // Progress runs against what the level *asks* for, not against every veil
+    // on the board — a bar that stalls at 40% on a level you have already won
+    // reads as broken.
+    const need = s.veilRequired > 0 ? s.veilRequired : s.veilTotal;
     const freed = s.veilTotal - s.veilRemaining;
-    const pct2 = s.veilTotal>0 ? Math.round((freed/s.veilTotal)*100) : 100;
+    const pct2 = need>0 ? Math.round((Math.min(freed,need)/need)*100) : 100;
     const fill = $('progress-fill'); const cur = $('progress-current');
     if(fill) fill.style.width = pct2+'%';
-    if(cur) cur.textContent = freed+' freed';
+    if(cur) cur.textContent = Math.min(freed, need)+' freed';
   }else{
     const fill = $('progress-fill'); const cur = $('progress-current');
     const pct3 = Math.min(100, Math.round((s.score/Math.max(1,s.target))*100));
