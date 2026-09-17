@@ -1,188 +1,131 @@
-"""Tiny sqlite-backed persistence for the leaderboard and analytics events.
-No external DB dependency — stdlib sqlite3 only, file lives next to the app
-so the whole backend stays a `pip install fastapi uvicorn && uvicorn app.main:app`
-away from running anywhere, including on-device if the SDK ever wants that."""
+"""Process-wide handle on whatever database this deployment is using.
+
+The queries themselves live in server/app/storage/ — this module is just
+the single place the rest of the app asks "is there a database, and give
+it to me". Keeping that behind one accessor is what lets main.py gate
+routes on `db.is_available()` instead of on which host it happens to be
+running on.
+
+Configuration is one environment variable:
+
+    DATABASE_URL=postgresql://user:pass@host/db    → PostgreSQL (production)
+    (unset, on a normal host)                      → server/data.db (dev)
+    (unset, on a serverless host)                  → no storage; those
+                                                     routes answer 501
+
+See server/README.md for the full setup, including which hosted providers
+this has been built against.
+"""
 
 from __future__ import annotations
 
-import sqlite3
-import time
-from pathlib import Path
+import logging
+import threading
 
-DB_PATH = Path(__file__).resolve().parent.parent / "data.db"
+from .storage import (
+    Store, StorageConfigurationError, StorageError, UsernameTaken,
+    create_store, database_url, is_serverless,
+)
 
+log = logging.getLogger("faithmatch.db")
 
-def get_conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
-def init_db() -> None:
-    conn = get_conn()
-    conn.executescript(
-        """
-        CREATE TABLE IF NOT EXISTS leaderboard (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            mode TEXT NOT NULL,
-            level_index INTEGER NOT NULL,
-            player TEXT NOT NULL,
-            score INTEGER NOT NULL,
-            stars INTEGER NOT NULL,
-            created_at REAL NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_leaderboard_level ON leaderboard(mode, level_index, score DESC);
-
-        CREATE TABLE IF NOT EXISTS analytics_events (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            event TEXT NOT NULL,
-            payload TEXT,
-            created_at REAL NOT NULL
-        );
-
-        -- Player profiles — see server/app/account.py. COLLATE NOCASE so
-        -- "Alice" and "alice" are the same account (players won't remember
-        -- which case they used on their first device).
-        CREATE TABLE IF NOT EXISTS players (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT NOT NULL UNIQUE COLLATE NOCASE,
-            password_hash TEXT NOT NULL,
-            created_at REAL NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS sessions (
-            token TEXT PRIMARY KEY,
-            player_id INTEGER NOT NULL REFERENCES players(id),
-            created_at REAL NOT NULL,
-            expires_at REAL NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_sessions_player ON sessions(player_id);
-
-        -- One row per player: the whole client-side save blob (see
-        -- js/state.js's STORAGE_KEY shape), stored opaquely as JSON. The
-        -- server doesn't need to understand its contents, just persist and
-        -- hand it back — last-write-wins, timestamped by the client.
-        CREATE TABLE IF NOT EXISTS player_state (
-            player_id INTEGER PRIMARY KEY REFERENCES players(id),
-            state_json TEXT NOT NULL,
-            updated_at REAL NOT NULL
-        );
-        """
-    )
-    conn.commit()
-    conn.close()
+_store: Store | None = None
+_store_resolved = False
+_schema_ready = False
+_lock = threading.Lock()
 
 
-# ---------------------------------------------------------------------------
-# Player profiles / accounts — see server/app/account.py for the endpoint
-# logic and server/app/auth.py for password hashing / token generation.
-# ---------------------------------------------------------------------------
-
-def create_player(username: str, password_hash: str) -> int:
-    """Raises sqlite3.IntegrityError if the username is already taken —
-    callers turn that into a 409, not a 500."""
-    conn = get_conn()
-    cur = conn.execute(
-        "INSERT INTO players (username, password_hash, created_at) VALUES (?,?,?)",
-        (username, password_hash, time.time()),
-    )
-    conn.commit()
-    player_id = cur.lastrowid
-    conn.close()
-    return player_id
+def get_store() -> Store | None:
+    """The configured store, resolved once per process. None means this
+    deployment has no durable storage — callers must handle that rather
+    than assume a database exists."""
+    global _store, _store_resolved
+    if not _store_resolved:
+        with _lock:
+            if not _store_resolved:
+                _store = create_store()
+                _store_resolved = True
+                log.info("storage backend: %s", _store.name if _store else "none")
+    return _store
 
 
-def get_player_by_username(username: str) -> dict | None:
-    conn = get_conn()
-    row = conn.execute("SELECT * FROM players WHERE username = ?", (username,)).fetchone()
-    conn.close()
-    return dict(row) if row else None
+def is_available() -> bool:
+    return get_store() is not None
 
 
-def create_session(player_id: int, token: str, expires_at: float) -> None:
-    conn = get_conn()
-    conn.execute(
-        "INSERT INTO sessions (token, player_id, created_at, expires_at) VALUES (?,?,?,?)",
-        (token, player_id, time.time(), expires_at),
-    )
-    conn.commit()
-    conn.close()
+def require_store() -> Store:
+    """For call sites that have already been gated. Raises StorageError
+    rather than returning None so a missed gate surfaces as a 503, never
+    as an AttributeError on None."""
+    store = get_store()
+    if store is None:
+        raise StorageError("This deployment has no persistent database configured.")
+    return store
 
 
-def get_player_by_token(token: str) -> dict | None:
-    """None if the token doesn't exist *or* has expired — callers can't
-    tell the difference, which is the point (an expired token should look
-    exactly like an invalid one to the client)."""
-    conn = get_conn()
-    row = conn.execute(
-        "SELECT players.* FROM sessions JOIN players ON players.id = sessions.player_id "
-        "WHERE sessions.token = ? AND sessions.expires_at > ?",
-        (token, time.time()),
-    ).fetchone()
-    conn.close()
-    return dict(row) if row else None
+def init_schema(strict: bool = False) -> bool:
+    """Create tables if they're missing. Idempotent, and safe to call from
+    every cold start.
+
+    Non-fatal by default: a database that's briefly unreachable at startup
+    must not take down level generation, the daily challenge or guest play,
+    none of which touch it. The database-backed routes will report 503 on
+    their own until it comes back, and the next call retries this.
+    """
+    global _schema_ready
+    store = get_store()
+    if store is None:
+        return False
+    if _schema_ready:
+        return True
+    try:
+        store.init_schema()
+        _schema_ready = True
+        return True
+    except Exception as exc:
+        log.warning("schema init deferred — database not ready yet: %s", exc)
+        if strict:
+            raise
+        return False
 
 
-def refresh_session(token: str, expires_at: float) -> None:
-    conn = get_conn()
-    conn.execute("UPDATE sessions SET expires_at = ? WHERE token = ?", (expires_at, token))
-    conn.commit()
-    conn.close()
+def ensure_schema() -> None:
+    """Lazy retry for the case where startup ran before the database was
+    up. Cheap once it has succeeded (a bool check)."""
+    if not _schema_ready:
+        init_schema()
 
 
-def delete_session(token: str) -> None:
-    conn = get_conn()
-    conn.execute("DELETE FROM sessions WHERE token = ?", (token,))
-    conn.commit()
-    conn.close()
+def describe() -> dict:
+    """Backend summary for /api/health — enough to tell, from outside,
+    whether a deployment can actually persist anything."""
+    store = get_store()
+    if store is None:
+        return {
+            "backend": "none",
+            "persistent": False,
+            "serverless": is_serverless(),
+            "reachable": False,
+        }
+    return {
+        "backend": store.name,
+        "persistent": store.durable,
+        "serverless": is_serverless(),
+        "reachable": store.ping(),
+    }
 
 
-def save_player_state(player_id: int, state_json: str, updated_at: float) -> None:
-    conn = get_conn()
-    conn.execute(
-        "INSERT INTO player_state (player_id, state_json, updated_at) VALUES (?,?,?) "
-        "ON CONFLICT(player_id) DO UPDATE SET state_json = excluded.state_json, updated_at = excluded.updated_at",
-        (player_id, state_json, updated_at),
-    )
-    conn.commit()
-    conn.close()
+def reset_for_tests(store: Store | None) -> None:
+    """Swap the process-wide store. Tests only."""
+    global _store, _store_resolved, _schema_ready
+    with _lock:
+        _store = store
+        _store_resolved = True
+        _schema_ready = False
 
 
-def load_player_state(player_id: int) -> dict | None:
-    conn = get_conn()
-    row = conn.execute(
-        "SELECT state_json, updated_at FROM player_state WHERE player_id = ?", (player_id,)
-    ).fetchone()
-    conn.close()
-    return dict(row) if row else None
-
-
-def record_score(mode: str, level_index: int, player: str, score: int, stars: int) -> None:
-    conn = get_conn()
-    conn.execute(
-        "INSERT INTO leaderboard (mode, level_index, player, score, stars, created_at) VALUES (?,?,?,?,?,?)",
-        (mode, level_index, player[:40], score, stars, time.time()),
-    )
-    conn.commit()
-    conn.close()
-
-
-def top_scores(mode: str, level_index: int, limit: int = 10) -> list[dict]:
-    conn = get_conn()
-    rows = conn.execute(
-        "SELECT player, score, stars, created_at FROM leaderboard "
-        "WHERE mode=? AND level_index=? ORDER BY score DESC LIMIT ?",
-        (mode, level_index, limit),
-    ).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
-
-
-def record_event(event: str, payload: str | None) -> None:
-    conn = get_conn()
-    conn.execute(
-        "INSERT INTO analytics_events (event, payload, created_at) VALUES (?,?,?)",
-        (event[:80], payload, time.time()),
-    )
-    conn.commit()
-    conn.close()
+__all__ = [
+    "get_store", "is_available", "require_store", "init_schema", "ensure_schema",
+    "describe", "reset_for_tests", "StorageError", "StorageConfigurationError",
+    "UsernameTaken", "database_url",
+]

@@ -1,3 +1,14 @@
 fastapi>=0.110
 uvicorn[standard]>=0.29
 pydantic>=2.6
+
+# PostgreSQL driver + connection pool. Not needed to run locally (no
+# DATABASE_URL means the local SQLite file, which is stdlib-only), but
+# required to run the Postgres tests or to point local dev at a hosted
+# database. Kept in sync with the root requirements.txt, which is what
+# Vercel installs.
+psycopg[binary,pool]>=3.1
+
+# Tests — see server/tests/.
+pytest>=8.0
+httpx>=0.27

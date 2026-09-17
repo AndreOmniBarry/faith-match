@@ -4,6 +4,7 @@ server/__pycache__/
 server/**/__pycache__/
 server/data.db
 *.pyc
+.pytest_cache/
 
 # OS/editor cruft
 .DS_Store
