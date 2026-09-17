@@ -1338,11 +1338,26 @@ async function startLevel(lvl, boardEl){
   comboMeter = 0; wildcardUsed = false; shrinkTriggered = false; pendingSurge = false;
 
   render.setBoardEl(boardEl);
-  await render.getReady(); // WebGL init + procedural tile textures are async on first use
+  // render.js can only rebuild its renderer (a lost WebGL context, a
+  // fallback step down the ladder) if something can hand it a live board
+  // afterwards — the grid lives here, so this module is that something.
+  render.setRepaintHandler(repaintBoard);
+  await render.getReady(); // renderer init + procedural tile textures are async on first use
   buildInitialBoard(lvl);
   veilTotal = veilRemainingCount();
   render.renderFullBoard(rows, cols, grid, tilesById, (e)=>onTilePointerDown && onTilePointerDown(e));
   notifyHUD();
+}
+
+// Redraws the current board from scratch onto whatever renderer is live
+// now. Specials, veils and positions all ride on the tile objects, so the
+// repainted board is the same board — only the handles are new. No deal-in
+// stagger: this runs mid-level, and the player wants their tiles back this
+// frame rather than re-dealt over a second.
+function repaintBoard(){
+  if(!render.getBoardEl() || !grid.length) return;
+  effects.resetLayers();
+  render.renderFullBoard(rows, cols, grid, tilesById, (e)=>onTilePointerDown && onTilePointerDown(e), false);
 }
 
 function resizeBoard(){

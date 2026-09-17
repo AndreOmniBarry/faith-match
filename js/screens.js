@@ -1423,6 +1423,12 @@ function initNav(){
 
 async function initScreens(){
   await state.loadState();
+  // The renderer can step down a rung (Canvas2D, or DOM tiles) on a device
+  // that can't run the full WebGL board, and can rebuild itself mid-level
+  // after a lost context. That used to be invisible — a board that simply
+  // never appeared. Route it through the same toast everything else uses so
+  // the player gets told, in their own words, what happened.
+  render.setRendererNotice((msg)=>showToast(msg, 3200));
   audio.setSoundEnabled(state.getSoundOn());
   theme.resetTheme();
   initSplash();
