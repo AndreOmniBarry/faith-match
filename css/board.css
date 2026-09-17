@@ -97,7 +97,48 @@ body.sky-hook-mode .board-arch{ box-shadow:inset 0 0 0 2px var(--comet-glow), in
 /* Tile rendering, gem shading, pop/land/swap/deal-in motion, special-tile
    foil sweeps, and the veil/obstacle overlay all live on the WebGL board
    now (see render.js) — drawn directly on the Pixi canvas instead of as
-   DOM elements, so none of that lives here as CSS anymore. */
+   DOM elements, so none of that lives here as CSS anymore.
+
+   The exception below is the DOM fallback board (js/render-dom.js), the
+   bottom rung of render.js's renderer ladder: it only ever appears on a
+   device where neither WebGL nor Canvas2D could be brought up, and the
+   choice there is between these plain tiles and a board that never
+   appears at all. Positioning and motion still come from render.js (one
+   composited transform per tile per frame) — this is purely the tile's
+   face, so it stays shape-coded and color-coded exactly like the real
+   thing. */
+.board.dom-board{ overflow:hidden; }
+.dom-tile{
+  position:absolute; top:0; left:0;
+  transform-origin:center center;
+  will-change:transform;
+  display:flex; align-items:center; justify-content:center;
+}
+.dom-tile .dt-face{
+  position:relative;
+  width:100%; height:100%;
+  border-radius:30%;
+  background:
+    linear-gradient(160deg,
+      color-mix(in srgb, #fff 22%, var(--dt-color, var(--gold))) 0%,
+      var(--dt-color, var(--gold)) 52%,
+      color-mix(in srgb, #000 20%, var(--dt-color, var(--gold))) 100%);
+  display:flex; align-items:center; justify-content:center;
+  color:#f8f0df;
+  box-shadow:inset 0 2px 6px rgba(255,255,255,.28), inset 0 -3px 8px rgba(0,0,0,.25);
+}
+.dom-tile .dt-face .tile-icon{ width:56%; height:56%; display:block; }
+.dom-tile.dt-special .dt-face{ box-shadow:inset 0 0 0 2px rgba(255,255,255,.9), 0 0 12px rgba(255,255,255,.55); }
+.dom-tile.dt-wrapped .dt-face{ box-shadow:inset 0 0 0 2px var(--wrapped-glow), 0 0 14px var(--wrapped-glow); }
+.dom-tile.dt-colorbomb .dt-face{ background:radial-gradient(circle at 38% 32%, #fff 0%, var(--colorbomb-glow) 70%); box-shadow:0 0 16px var(--colorbomb-glow); }
+.dom-tile.dt-comet .dt-face{ box-shadow:inset 0 0 0 2px var(--comet-glow), 0 0 14px var(--comet-glow); }
+.dom-tile.dt-frostbloom .dt-face{ box-shadow:inset 0 0 0 2px var(--frostbloom-glow), 0 0 14px var(--frostbloom-glow); }
+.dom-tile.dt-halo .dt-face{ background:radial-gradient(circle at 50% 50%, #fff 0%, var(--halo-glow) 72%); box-shadow:0 0 20px var(--halo-glow); }
+.dom-tile.dt-veiled .dt-face::after{
+  content:''; position:absolute; inset:0; border-radius:inherit;
+  background:rgba(20,15,33,.72); box-shadow:inset 0 0 0 2px rgba(255,255,255,.25);
+}
+.dom-tile.selected .dt-face{ box-shadow:inset 0 0 0 3px var(--gold), 0 0 16px rgba(230,183,84,.7); }
 
 .combo-popup{
   position:absolute; top:38%; left:50%; transform:translate(-50%,-50%) scale(.7);

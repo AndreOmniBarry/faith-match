@@ -54,6 +54,11 @@ function buildSoftTexture(){
 async function init(canvas){
   if(app) return readyPromise;
   canvasEl = canvas;
+  // PixiJS is a classic <script> in index.html (see the comment there) — on
+  // a bad mobile connection it can simply never arrive. This layer is pure
+  // decoration on the splash screen, so a missing PIXI must degrade to "no
+  // sparkles", not to a thrown error on the very first screen of the game.
+  if(typeof PIXI === 'undefined' || !PIXI.Application) return;
   app = new PIXI.Application();
   emberLayer = new PIXI.Container();
   orbitLayer = new PIXI.Container();

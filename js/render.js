@@ -7,9 +7,30 @@
 // transitions. engine.js still treats what this returns as an opaque `el`
 // handle with a `.classList.add/remove(name)` surface, matching the old
 // DOM-based module's contract, so the match-rules code barely changed.
+//
+// Rendering is a *ladder*, not a single path — the board has to appear on
+// every device that can open the page, including the weak, old and
+// memory-starved ones this game will land on at scale:
+//
+//   1. WebGL (PixiJS)   — the full-fidelity path: filters, particles, glow.
+//   2. Canvas2D (PixiJS)— same scene graph, software-rasterized. Used when
+//                         WebGL is unavailable or its init throws.
+//   3. DOM tiles        — js/render-dom.js, used when there is no usable
+//                         canvas at all (PixiJS itself failed to load, or
+//                         both of its backends failed). Plain, but playable.
+//
+// Plus one runtime recovery path: a WebGL context that is *lost* mid-level
+// (routine on low-memory Android when the app is backgrounded, or under
+// GPU driver pressure) used to blank the board permanently and silently —
+// see handleContextLoss() for why Pixi's own handler doesn't save us there.
 
 import { SYMBOLS } from './content.js';
 import { iconSVG } from './icons.js';
+import { DomTileHandle } from './render-dom.js';
+
+const MODE_WEBGL = 'webgl';
+const MODE_CANVAS = 'canvas';
+const MODE_DOM = 'dom';
 
 let app = null;
 let boardEl = null;
@@ -17,29 +38,157 @@ let canvasEl = null;
 let boardLayer = null;
 let tileSize = 40;
 let cols = 8, rows = 8;
+let mode = null;             // null until the boot ladder settles
+let booted = false;          // ensureApp() has run its one-time boot
 const baseTextures = new Map(); // type index -> PIXI.Texture (shared, reused per tile)
 const reduceMotion = typeof window!=='undefined' && window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 let readyPromise = null;
+let noticeFn = null;         // set by screens.js — how a degraded mode reaches the player
+let repaintFn = null;        // set by engine.js — how we ask for a full board redraw
 
-/* ============================= INIT ============================= */
+/* ============================= INIT / RENDER LADDER ============================= */
 
-function ensureApp(){
-  if(app) return app;
-  canvasEl = document.getElementById('fx-canvas');
-  app = new PIXI.Application();
-  boardLayer = new PIXI.Container();
-  readyPromise = app.init({
+function pixiInitOptions(extra){
+  return Object.assign({
     canvas: canvasEl,
     width: 400, height: 400,
     backgroundAlpha: 0,
     antialias: true,
     resolution: Math.min(2, window.devicePixelRatio||1),
     autoDensity: true,
-  }).then(()=>{
-    app.stage.addChild(boardLayer);
-    return buildAllTextures();
-  }).catch(e=>{ /* WebGL unavailable — tiles simply won't render; nothing else in the app depends on this promise settling */ });
+  }, extra||{});
+}
+
+// A canvas element can only ever hand out one *kind* of context for its
+// whole life — once it has been a WebGL surface, getContext('2d') on it
+// returns null forever. So every re-init (Canvas2D retry, post-context-loss
+// rebuild) has to start from a genuinely fresh element, not the old one.
+function freshCanvasEl(){
+  const old = document.getElementById('fx-canvas');
+  if(!old) return null;
+  const next = document.createElement('canvas');
+  next.id = old.id;
+  next.className = old.className;
+  old.parentNode.replaceChild(next, old);
+  canvasEl = next;
+  return next;
+}
+
+async function bootPixi(){
+  try{
+    await app.init(pixiInitOptions());
+  }catch(e){
+    // Pixi picks WebGL first and falls back to its own Canvas2D renderer on
+    // its own; landing here means even that didn't come up. Retry once,
+    // explicitly asking for Canvas2D on a clean canvas — on some old
+    // WebViews the first attempt leaves the element poisoned.
+    try{ app.destroy({ removeView:false }); }catch(_){}
+    freshCanvasEl();
+    app = new PIXI.Application();
+    await app.init(pixiInitOptions({ preference:'canvas' }));
+  }
+  mode = (app.renderer && app.renderer.name === 'webgl') ? MODE_WEBGL : MODE_CANVAS;
+  app.stage.addChild(boardLayer);
+  watchForContextLoss();
+  await buildAllTextures();
+}
+
+function ensureApp(){
+  if(booted) return app;
+  booted = true;
+  canvasEl = document.getElementById('fx-canvas');
+  // PixiJS is a ~800KB classic script (see index.html). On a flaky mobile
+  // connection it can simply never arrive, and `new PIXI.Application()`
+  // then throws a ReferenceError straight through startLevel() — which is
+  // one of the ways the board used to end up blank with nothing logged.
+  if(typeof PIXI === 'undefined' || !PIXI.Application){
+    readyPromise = Promise.resolve(useDomFallback());
+    return null;
+  }
+  try{
+    app = new PIXI.Application();
+    boardLayer = new PIXI.Container();
+  }catch(e){
+    readyPromise = Promise.resolve(useDomFallback());
+    return null;
+  }
+  readyPromise = bootPixi().catch(()=>{ useDomFallback(); });
   return app;
+}
+
+// Last rung of the ladder: no usable canvas, so tiles become DOM elements.
+function useDomFallback(){
+  mode = MODE_DOM;
+  app = null;
+  boardLayer = null;
+  baseTextures.clear();
+  // .fx-canvas sits above #board at z-index 25 with touch-action:none — left
+  // visible it would swallow every tap meant for a DOM tile.
+  const cv = document.getElementById('fx-canvas');
+  if(cv) cv.style.display = 'none';
+  if(boardEl) boardEl.classList.add('dom-board');
+  notify('Simple graphics mode — this device could not start the visual effects.');
+}
+
+function notify(msg){ if(noticeFn) try{ noticeFn(msg); }catch(_){} }
+function setRendererNotice(fn){ noticeFn = fn; }
+function setRepaintHandler(fn){ repaintFn = fn; }
+function getRenderMode(){ return mode; }
+
+/* ---------- WebGL context loss ---------- */
+// A lost context is the single most common way a match-3 board goes blank
+// on a real low-end phone: background the app, take a call, come back, and
+// the GPU has reclaimed the context. Pixi installs its own handler, but it
+// only ever asks for a restore when *it* forced the loss
+// (`_contextLossForced`); a loss the driver or OS initiated is
+// preventDefault()ed and then nothing further happens, so the canvas stays
+// blank for the rest of the session.
+//
+// We rebuild on Canvas2D rather than trying to restore WebGL, for two
+// reasons: a restored context comes back with every texture blank, because
+// ours are renderer.generateTexture() render targets with no CPU-side
+// source to re-upload; and a device that lost the context once under memory
+// pressure is likely to do it again. Canvas2D cannot be lost, so the board
+// stays up for the rest of the session. It is the same renderer devices
+// without WebGL already use, so it is a well-travelled path, not a special
+// case that only runs after a failure.
+let contextWatched = false;
+let recovering = false;
+function watchForContextLoss(){
+  if(contextWatched || !canvasEl || mode !== MODE_WEBGL) return;
+  contextWatched = true;
+  canvasEl.addEventListener('webglcontextlost', handleContextLoss, false);
+}
+function handleContextLoss(e){
+  if(e && e.preventDefault) e.preventDefault();
+  if(recovering) return;
+  recovering = true;
+  rebuildOnCanvas2D().catch(()=>{ useDomFallback(); if(repaintFn) repaintFn(); });
+}
+async function rebuildOnCanvas2D(){
+  const old = app;
+  app = null;
+  boardLayer = null;
+  baseTextures.clear();
+  liveHandles.clear();
+  activeTweens.clear();
+  tickerAttached = false;
+  breatheTickerOn = false;
+  contextWatched = false;
+  try{ old.destroy({ removeView:false }, { children:true, texture:true }); }catch(_){}
+
+  freshCanvasEl();
+  app = new PIXI.Application();
+  boardLayer = new PIXI.Container();
+  await app.init(pixiInitOptions({ preference:'canvas' }));
+  mode = MODE_CANVAS;
+  app.stage.addChild(boardLayer);
+  await buildAllTextures();
+  recovering = false;
+  // Every tile handle died with the old renderer — engine.js owns the board
+  // state, so it is the only thing that can hand us a live board back.
+  if(repaintFn) repaintFn();
+  notify('Graphics restarted in a lighter mode — your level is exactly where you left it.');
 }
 
 function hexOf(cssColorVar){
@@ -152,6 +301,7 @@ async function buildAllTextures(){
 function setBoardEl(el){
   boardEl = el;
   ensureApp();
+  if(mode === MODE_DOM) boardEl.classList.add('dom-board');
 }
 function getBoardEl(){ return boardEl; }
 function getApp(){ ensureApp(); return app; }
@@ -169,8 +319,29 @@ function measureTileSize(colsArg){
 function getTileSize(){ return tileSize; }
 function cellCenter(r,c){ return { x:(c+0.5)*tileSize, y:(r+0.5)*tileSize }; }
 
+/* ============================= FRAME CLOCK ============================= */
+// Pixi's ticker when there's a Pixi app, a plain rAF loop when there isn't
+// (DOM fallback) — so tweening, breathing and the DOM flush all run off one
+// abstraction instead of every caller checking which renderer is live.
+
+const rafCallbacks = new Set();
+let rafHandle = 0;
+function rafLoop(){
+  rafHandle = requestAnimationFrame(rafLoop);
+  rafCallbacks.forEach(fn=>{ try{ fn(); }catch(_){} });
+}
+function onTick(fn){
+  if(app && app.ticker){ app.ticker.add(fn); return; }
+  rafCallbacks.add(fn);
+  if(!rafHandle) rafHandle = requestAnimationFrame(rafLoop);
+}
+function offTick(fn){
+  if(app && app.ticker){ try{ app.ticker.remove(fn); }catch(_){} }
+  rafCallbacks.delete(fn);
+}
+
 /* ============================= TWEENING ============================= */
-// A tiny hand-rolled tween runner driven by the Pixi ticker — no extra
+// A tiny hand-rolled tween runner driven by the frame clock — no extra
 // dependency for something this scoped. Each tile container can have at
 // most one active positional tween and one active "effect" tween at a time.
 
@@ -192,9 +363,9 @@ function easeOutBack(x){ const c1=1.5, c3=c1+1; return 1+c3*Math.pow(x-1,3)+c1*M
 function easeOutCubic(x){ return 1-Math.pow(1-x,3); }
 let tickerAttached = false;
 function ensureTicker(){
-  if(tickerAttached || !app) return;
+  if(tickerAttached) return;
   tickerAttached = true;
-  app.ticker.add(()=>{
+  onTick(()=>{
     if(!activeTweens.size) return;
     const now = performance.now();
     activeTweens.forEach(rec=>{
@@ -217,6 +388,10 @@ function ensureTicker(){
 // transform channel means the ambient pulse and any one-shot effect never
 // fight over the same number. Skipped entirely for prefers-reduced-motion,
 // and paused per-tile while it's actively being dragged.
+//
+// The same loop also flushes DOM-fallback tiles (a no-op on the Pixi path),
+// so those tiles get their one CSS transform write per frame from the one
+// place that already walks every live handle.
 const liveHandles = new Set();
 const BREATHE_PERIOD = 1.8; // seconds
 const BREATHE_AMOUNT = 0.035; // max scale bump — subtle on purpose
@@ -227,15 +402,17 @@ function heartbeatCurve(u){
 }
 let breatheTickerOn = false;
 function ensureBreatheTicker(){
-  if(breatheTickerOn || !app || reduceMotion) return;
+  if(breatheTickerOn) return;
   breatheTickerOn = true;
-  app.ticker.add(()=>{
+  onTick(()=>{
     const t = performance.now()/1000;
     liveHandles.forEach(h=>{
-      if(h._dragBaseX!=null) return; // lifted for a drag — let the drag read clearly instead
-      const u = (((t*(1/BREATHE_PERIOD)) + h._breathePhase) % 1);
-      const s = (h._baseScale||1) * (1 + heartbeatCurve(u)*BREATHE_AMOUNT);
-      h.sprite.scale.set(s);
+      if(!reduceMotion && h._dragBaseX==null){ // lifted for a drag — let the drag read clearly instead
+        const u = (((t*(1/BREATHE_PERIOD)) + h._breathePhase) % 1);
+        const s = (h._baseScale||1) * (1 + heartbeatCurve(u)*BREATHE_AMOUNT);
+        h.sprite.scale.set(s);
+      }
+      if(h.flush) h.flush();
     });
   });
 }
@@ -305,14 +482,14 @@ class TileHandle{
       if(!this._pulseTicking){
         this._pulseTicking = true;
         ensureTicker();
-        app.ticker.add(this._pulseFn = ()=>{
-          if(!this.container.parent){ app.ticker.remove(this._pulseFn); this._pulseTicking=false; return; }
+        onTick(this._pulseFn = ()=>{
+          if(!this.container.parent){ offTick(this._pulseFn); this._pulseTicking=false; return; }
           this._pulseT += 0.06;
           this.glow.alpha = 0.6 + Math.sin(this._pulseT)*0.4;
         });
       }
     }else if(this._pulseTicking){
-      app.ticker.remove(this._pulseFn); this._pulseTicking = false; this.glow.alpha = 1;
+      offTick(this._pulseFn); this._pulseTicking = false; this.glow.alpha = 1;
     }
 
     if(tile.veil){
@@ -325,18 +502,24 @@ class TileHandle{
       this.container.removeChild(this.veilG); this.veilG.destroy(); this.veilG = null;
     }
   }
+}
+
+// The one-shot motion vocabulary is identical on both backends — it only
+// ever animates numbers on `handle.container` — so it lives once here and
+// is shared onto the DOM tile class rather than written out twice.
+const TILE_MOTION = {
   playPop(){
     cancelTweensOf(this.container.scale,['x','y']);
     tween(this.container.scale, { x:0.1, y:0.1 }, 180, t=>t*t, null);
     tween(this.container, { rotation: 0.5 }, 180);
-  }
+  },
   playSpawnPulse(){
-    this.container.scale.set(1);
+    this.container.scale.x = this.container.scale.y = 1;
     cancelTweensOf(this.container.scale,['x','y']);
     tween(this.container.scale, { x:1.35, y:1.35 }, 160, easeOutCubic, ()=>{
       tween(this.container.scale, { x:1, y:1 }, 180, easeOutBack);
     });
-  }
+  },
   playShake(){
     const baseX = this.container.x;
     let i = 0;
@@ -347,24 +530,26 @@ class TileHandle{
       i++;
     };
     step();
-  }
+  },
   playLand(){
     cancelTweensOf(this.container.scale,['x','y']);
-    this.container.scale.set(1,1);
+    this.container.scale.x = this.container.scale.y = 1;
     tween(this.container.scale, { y:0.68, x:1.22 }, 90, easeOutCubic, ()=>{
       tween(this.container.scale, { y:1.12, x:0.92 }, 110, easeOutCubic, ()=>{
         tween(this.container.scale, { y:1, x:1 }, 120, easeOutBack);
       });
     });
-  }
+  },
   playSwapStretch(){
     cancelTweensOf(this.container.scale,['x','y']);
-    this.container.scale.set(1,1);
+    this.container.scale.x = this.container.scale.y = 1;
     tween(this.container.scale, { x:1.2, y:1.2 }, 90, easeOutCubic, ()=>{
       tween(this.container.scale, { x:1, y:1 }, 140, easeOutBack);
     });
-  }
-}
+  },
+};
+Object.assign(TileHandle.prototype, TILE_MOTION);
+Object.assign(DomTileHandle.prototype, TILE_MOTION);
 
 /* ============================= PUBLIC API (matches the old DOM module) ============================= */
 
@@ -388,13 +573,13 @@ function placeTileInstant(handle, r, c){
 // Same cleanup setTileTransform() does (cancel any in-flight tween, drop
 // the drag lift/base bookkeeping), but places the tile instantly instead
 // of tweening there. That distinction matters specifically right before
-// triggering a shake (TileHandle.playShake(), see its own comment): shake
-// reads the container's *current* position synchronously as the point to
-// wiggle around and return to. Pair it with setTileTransform() — whose
-// tween hasn't advanced anywhere yet at the instant shake reads it — and
-// shake captures the pre-tween (wrong) position, then outlasts and wins
-// over that tween (playShake never calls cancelTweensOf, so nothing stops
-// it), permanently freezing the tile there instead of at its real cell.
+// triggering a shake (playShake(), see its own comment): shake reads the
+// container's *current* position synchronously as the point to wiggle
+// around and return to. Pair it with setTileTransform() — whose tween
+// hasn't advanced anywhere yet at the instant shake reads it — and shake
+// captures the pre-tween (wrong) position, then outlasts and wins over that
+// tween (playShake never calls cancelTweensOf, so nothing stops it),
+// permanently freezing the tile there instead of at its real cell.
 // Calling this first means shake always captures the *true* home position.
 function snapTileHome(handle, r, c){
   if(!handle) return;
@@ -413,16 +598,23 @@ function resizeTile(handle, r, c){
 
 function createTileEl(tile, onPointerDown){
   ensureApp();
-  const handle = new TileHandle(tile);
-  handle.updateVisual();
-  handle.container.eventMode = 'static';
-  handle.container.cursor = 'pointer';
-  handle.container.on('pointerdown', (e)=>{
-    if(!onPointerDown || !canvasEl) return;
-    const rect = canvasEl.getBoundingClientRect();
-    onPointerDown({ clientX: rect.left + e.global.x, clientY: rect.top + e.global.y });
-  });
-  boardLayer.addChild(handle.container);
+  let handle;
+  if(mode === MODE_DOM){
+    handle = new DomTileHandle(tile, boardEl, onPointerDown);
+    handle.setSize(tileSize*0.94);
+    handle.updateVisual();
+  }else{
+    handle = new TileHandle(tile);
+    handle.updateVisual();
+    handle.container.eventMode = 'static';
+    handle.container.cursor = 'pointer';
+    handle.container.on('pointerdown', (e)=>{
+      if(!onPointerDown || !canvasEl) return;
+      const rect = canvasEl.getBoundingClientRect();
+      onPointerDown({ clientX: rect.left + e.global.x, clientY: rect.top + e.global.y });
+    });
+    boardLayer.addChild(handle.container);
+  }
   liveHandles.add(handle);
   ensureBreatheTicker();
   return handle;
@@ -430,15 +622,18 @@ function createTileEl(tile, onPointerDown){
 function refreshTileVisual(tile){
   if(tile.el) tile.el.updateVisual();
 }
-function removeTileEl(tile){
-  if(!tile.el) return;
-  const h = tile.el;
+function destroyHandle(h){
   liveHandles.delete(h);
-  if(h._pulseTicking && app) app.ticker.remove(h._pulseFn);
+  if(h._pulseTicking) offTick(h._pulseFn);
   cancelTweensOf(h.container);
   cancelTweensOf(h.container.scale);
+  if(h.destroy){ h.destroy(); return; } // DOM handle owns its own teardown
   if(h.container.parent) h.container.parent.removeChild(h.container);
   h.container.destroy({ children:true });
+}
+function removeTileEl(tile){
+  if(!tile.el) return;
+  destroyHandle(tile.el);
 }
 function playLandAnimation(tile){ if(tile.el) tile.el.playLand(); }
 function playSwapStretch(tile){ if(tile.el) tile.el.playSwapStretch(); }
@@ -470,9 +665,20 @@ function endTileDragSnapBack(handle){
   tween(handle.container, target, 260, easeOutBack);
 }
 
-function renderFullBoard(rowsArg, colsArg, grid, tilesById, onPointerDown){
+// `animate` is the staggered deal-in every level opens with. A repaint
+// triggered by renderer recovery passes false: the player is mid-level and
+// wants their board back this frame, not re-dealt over a second.
+function renderFullBoard(rowsArg, colsArg, grid, tilesById, onPointerDown, animate){
   rows = rowsArg; cols = colsArg;
-  boardLayer.removeChildren();
+  const deal = animate !== false;
+  // Every handle from the previous board dies here. Without this they stayed
+  // in liveHandles for the rest of the session — the breathing ticker kept
+  // walking destroyed tiles, and the leak grew by a whole board per level,
+  // which is exactly the memory pressure that costs a weak device its
+  // WebGL context in the first place.
+  liveHandles.forEach(h=>destroyHandle(h));
+  liveHandles.clear();
+  if(boardLayer) boardLayer.removeChildren();
   measureTileSize(cols);
   let i = 0;
   for(let r=0;r<rows;r++){
@@ -481,7 +687,8 @@ function renderFullBoard(rowsArg, colsArg, grid, tilesById, onPointerDown){
       const handle = createTileEl(tile, onPointerDown);
       tile.el = handle;
       placeTileInstant(handle, r, c);
-      handle.container.scale.set(0.3);
+      if(!deal) continue;
+      handle.container.scale.x = handle.container.scale.y = 0.3;
       handle.container.alpha = 0;
       const delay = i*14;
       setTimeout(()=>{
@@ -501,4 +708,5 @@ export {
   playLandAnimation, playSwapStretch,
   beginTileDrag, updateTileDrag, endTileDragSnapBack,
   tween, cancelTweensOf, easeOutBack, easeOutCubic, hexOf,
+  setRendererNotice, setRepaintHandler, getRenderMode,
 };

@@ -148,6 +148,172 @@ function veilCellsFor(shape, rng, density){
   return shuffled.slice(0,n).map(([r,c])=>[r,c,layers]);
 }
 
+/* ---------- offline target calibration ----------
+   The server does not guess a score target: server/app/level_gen.py runs a
+   batch of simulated playouts of the candidate board and sets the target to
+   a fraction of what a mixed-skill player actually scores. This is a port of
+   that simulator, so the offline fallback calibrates its targets the same
+   way instead of approximating them.
+
+   It replaces a closed-form guess (`60*moves + rows*cols*colors*9`) that was
+   not just imprecise but *inverted*: it rose with board size and colour
+   count, while the achievable score falls as the move budget tightens and
+   the palette widens. Offline and online therefore diverged further the
+   deeper a player got — measured against the server at level 501, the
+   offline target was 6650 where the server asked 480, about 14x. Since the
+   offline path is the common one on a cold serverless start (see this
+   file's header), that curve was the one most players would actually meet.
+
+   Deliberately mirrors the server's rules, not the full client engine: no
+   specials, no veils, no combo meter. Both sides estimate the same baseline
+   scoring, which is what makes the two targets comparable. */
+const SIM_PLAYOUTS = 7;            // server runs 18; 7 keeps the median stable while staying well inside a frame budget on a weak phone
+const SIM_RANDOM_MOVE_CHANCE = 0.22; // fraction of moves a simulated "average player" plays sub-optimally — must match the server
+
+const simIdx = (cols, r, c)=>r*cols + c;
+
+function simGenBoard(rng, rows, cols, colors){
+  const b = new Int16Array(rows*cols);
+  const wouldRun = (r,c,t)=>{
+    if(c>=2 && b[simIdx(cols,r,c-1)]===t && b[simIdx(cols,r,c-2)]===t) return true;
+    if(r>=2 && b[simIdx(cols,r-1,c)]===t && b[simIdx(cols,r-2,c)]===t) return true;
+    return false;
+  };
+  for(let r=0;r<rows;r++) for(let c=0;c<cols;c++){
+    let t = 0;
+    for(let k=0;k<30;k++){ t = Math.floor(rng()*colors); if(!wouldRun(r,c,t)) break; }
+    b[simIdx(cols,r,c)] = t;
+  }
+  return b;
+}
+
+function simLineRun(b, rows, cols, r, c){
+  const t = b[simIdx(cols,r,c)];
+  let run = 1;
+  for(let cc=c-1; cc>=0 && b[simIdx(cols,r,cc)]===t; cc--) run++;
+  for(let cc=c+1; cc<cols && b[simIdx(cols,r,cc)]===t; cc++) run++;
+  if(run>=3) return run;
+  run = 1;
+  for(let rr=r-1; rr>=0 && b[simIdx(cols,rr,c)]===t; rr--) run++;
+  for(let rr=r+1; rr<rows && b[simIdx(cols,rr,c)]===t; rr++) run++;
+  return run>=3 ? run : 1;
+}
+
+function simPointsFor(length){ return 30 + (length-3)*40; }
+
+function simHasMove(b, rows, cols){
+  const swapOk = (r1,c1,r2,c2)=>{
+    const i1 = simIdx(cols,r1,c1), i2 = simIdx(cols,r2,c2);
+    if(b[i1]===b[i2]) return false;
+    const t1 = b[i1]; b[i1] = b[i2]; b[i2] = t1;
+    const ok = simLineRun(b,rows,cols,r1,c1)>=3 || simLineRun(b,rows,cols,r2,c2)>=3;
+    const t2 = b[i1]; b[i1] = b[i2]; b[i2] = t2;
+    return ok;
+  };
+  for(let r=0;r<rows;r++) for(let c=0;c<cols;c++){
+    if(c+1<cols && swapOk(r,c,r,c+1)) return true;
+    if(r+1<rows && swapOk(r,c,r+1,c)) return true;
+  }
+  return false;
+}
+
+// Scores every run >=3 on the board, clears them, refills from the top, and
+// repeats — each further round of the same move scores 40% more, matching
+// the engine's combo multiplier.
+function simResolveCascades(b, rows, cols, colors, rng){
+  let score = 0, combo = 0;
+  for(;;){
+    const matched = new Set();
+    let any = false;
+    for(let r=0;r<rows;r++){
+      let c = 0;
+      while(c<cols){
+        const t = b[simIdx(cols,r,c)];
+        let c2 = c+1;
+        while(c2<cols && b[simIdx(cols,r,c2)]===t) c2++;
+        if(c2-c>=3){ any = true; score += Math.round(simPointsFor(c2-c)*(1+0.4*combo));
+          for(let k=c;k<c2;k++) matched.add(simIdx(cols,r,k)); }
+        c = c2;
+      }
+    }
+    for(let c=0;c<cols;c++){
+      let r = 0;
+      while(r<rows){
+        const t = b[simIdx(cols,r,c)];
+        let r2 = r+1;
+        while(r2<rows && b[simIdx(cols,r2,c)]===t) r2++;
+        if(r2-r>=3){ any = true; score += Math.round(simPointsFor(r2-r)*(1+0.4*combo));
+          for(let k=r;k<r2;k++) matched.add(simIdx(cols,k,c)); }
+        r = r2;
+      }
+    }
+    if(!any) break;
+    combo++;
+    matched.forEach(i=>{ b[i] = -1; });
+    for(let c=0;c<cols;c++){
+      let write = rows-1;
+      for(let r=rows-1;r>=0;r--){
+        const v = b[simIdx(cols,r,c)];
+        if(v!==-1){ b[simIdx(cols,write,c)] = v; if(write!==r) b[simIdx(cols,r,c)] = -1; write--; }
+      }
+      for(let r=write;r>=0;r--) b[simIdx(cols,r,c)] = Math.floor(rng()*colors);
+    }
+  }
+  return score;
+}
+
+// Greedy = take the longest run available (an optimal-ish player); otherwise
+// any legal swap at random (an average one). Mixing the two is what makes
+// the median a realistic target rather than a best-case one.
+function simPickSwap(b, rows, cols, rng, greedy){
+  const candidates = [];
+  let top = 0;
+  for(let r=0;r<rows;r++) for(let c=0;c<cols;c++){
+    for(const [dr,dc] of [[0,1],[1,0]]){
+      const r2 = r+dr, c2 = c+dc;
+      if(r2>=rows || c2>=cols) continue;
+      const i1 = simIdx(cols,r,c), i2 = simIdx(cols,r2,c2);
+      if(b[i1]===b[i2]) continue;
+      const t1 = b[i1]; b[i1] = b[i2]; b[i2] = t1;
+      const best = Math.max(simLineRun(b,rows,cols,r,c), simLineRun(b,rows,cols,r2,c2));
+      const t2 = b[i1]; b[i1] = b[i2]; b[i2] = t2;
+      if(best>=3){ candidates.push([i1,i2,best]); if(best>top) top = best; }
+    }
+  }
+  if(!candidates.length) return null;
+  const pool = greedy ? candidates.filter(x=>x[2]===top) : candidates;
+  return pool[Math.floor(rng()*pool.length)];
+}
+
+function simPlayout(rows, cols, colors, moves, rng){
+  const b = simGenBoard(rng, rows, cols, colors);
+  let score = 0;
+  for(let m=0;m<moves;m++){
+    if(!simHasMove(b, rows, cols)){
+      const flat = seededShuffle(Array.from(b), rng);
+      for(let i=0;i<flat.length;i++) b[i] = flat[i];
+      continue;
+    }
+    const swap = simPickSwap(b, rows, cols, rng, rng() > SIM_RANDOM_MOVE_CHANCE);
+    if(!swap) break;
+    const [i1,i2] = swap;
+    const t = b[i1]; b[i1] = b[i2]; b[i2] = t;
+    score += simResolveCascades(b, rows, cols, colors, rng);
+  }
+  return score;
+}
+
+// Same shape as the server's _calibrate_target(): the median of a batch of
+// playouts, scaled by 0.72 * ease. Reachable without perfect play, still a
+// real goal — and it now moves the same direction the achievable score does.
+function calibrateTarget(shape, rng, ease){
+  const scores = [];
+  for(let i=0;i<SIM_PLAYOUTS;i++) scores.push(simPlayout(shape.rows, shape.cols, shape.colors, shape.moves, rng));
+  scores.sort((a,b)=>a-b);
+  const median = scores[Math.floor(scores.length/2)];
+  return Math.max(200, Math.round(median * 0.72 * ease / 10) * 10);
+}
+
 function applyFinale(level, shape, mods, rng){
   level.finalePiece = mods.piece;
   level.skin = mods.skin;
@@ -182,11 +348,9 @@ function localFallbackLevel(mode, index){
   const rawShape = curveShape(index);
   const shape = easeShape(rawShape, ease);
   const rng = mulberry32(hashSeed(`faithmatch::${mode}::${index}`));
-  // No simulated playouts offline — approximate the same target shape the
-  // server would calibrate to, from board size/move budget directly.
-  const cellBudget = shape.rows*shape.cols*shape.colors;
-  const rawTarget = 60*shape.moves + cellBudget*9;
-  const target = Math.max(200, Math.round(rawTarget * 0.72 * ease / 10) * 10);
+  // Its own RNG stream, so adding the simulation didn't shift the veil and
+  // collect layouts every existing offline level already generates.
+  const target = calibrateTarget(shape, mulberry32(hashSeed(`sim::${mode}::${index}`)), ease);
   const objective = modeById(mode)?.objective || 'score';
   const names = ['A Gentle Start','Rising Faith','Steady Hands','Widening Path','Deeper Waters',
     "Refiner's Fire",'Mountain Climb','Radiant Crown','Quiet Trust','Open Doors','Living Water','New Mercies'];
@@ -285,12 +449,8 @@ function dailyFallbackLevel(dateISO){
   const pick = (arr)=>arr[Math.floor(rng()*arr.length)];
   const rawShape = { rows:DAILY_ROWS, cols:DAILY_COLS, colors:pick(DAILY_COLORS_CHOICES), moves:pick(DAILY_MOVES_CHOICES), veilDensity:0 };
   const shape = easeShape(rawShape, DAILY_EASE);
-  // Same offline target approximation as localFallbackLevel — see its
-  // comment: no simulated playouts client-side, so approximate the shape
-  // the server would calibrate to, from board size/move budget directly.
-  const cellBudget = shape.rows*shape.cols*shape.colors;
-  const rawTarget = 60*shape.moves + cellBudget*9;
-  const target = Math.max(200, Math.round(rawTarget * 0.72 * DAILY_EASE / 10) * 10);
+  // Same simulated calibration localFallbackLevel uses — see calibrateTarget().
+  const target = calibrateTarget(shape, mulberry32(hashSeed(`sim::daily::${dateISO}`)), DAILY_EASE);
   const names = ['A Gentle Start','Rising Faith','Steady Hands','Widening Path','Deeper Waters',
     "Refiner's Fire",'Mountain Climb','Radiant Crown','Quiet Trust','Open Doors','Living Water','New Mercies'];
   return {

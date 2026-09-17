@@ -22,6 +22,16 @@ function ensureLayers(){
   return app;
 }
 
+// Called when render.js rebuilds its renderer after a lost WebGL context:
+// the old Pixi application (and with it these two layers) was destroyed, so
+// the cached references have to be dropped or ensureLayers() would keep
+// handing back containers that no longer belong to any stage.
+function resetLayers(){
+  particleLayer = null;
+  flashLayer = null;
+  particles = [];
+}
+
 function init(elements){
   boardArch = elements.boardArch;
   comboPopupEl = elements.comboPopupEl;
@@ -335,7 +345,7 @@ function hintSparkle(handleA, handleB, cells){
 }
 
 export {
-  init, resizeCanvas, burst, ring, beam, trail, bloom, shake, flash, pulseAmbient,
+  init, resetLayers, resizeCanvas, burst, ring, beam, trail, bloom, shake, flash, pulseAmbient,
   frostShatter, cometStreak, surgeBlast,
   comboPopup, confettiBurst, idleShimmer, hintSparkle,
 };
