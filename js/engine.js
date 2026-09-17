@@ -506,6 +506,20 @@ function veilRemainingCount(){
   for(let r=0;r<rows;r++) for(let c=0;c<cols;c++) if(veilGrid[r][c]>0) n++;
   return n;
 }
+// How many of this level's veils have to be freed to win. Refiner's Fire used
+// to require every single one, which the server's own playout simulation
+// measured as unwinnable past the early chapters — on a 9x9 board with 8
+// symbols and a 10-move budget a player frees all the veils in under a third
+// of playouts with only *two* on the board, because each needs two matches
+// landed right beside it. The server now calibrates a threshold per level
+// (level.veil.required) the same way it calibrates a score target. Falling
+// back to "all of them" keeps a level cached or served by an older API
+// working exactly as it did.
+function veilRequiredCount(){
+  const asked = level.veil && level.veil.required;
+  if(!(asked > 0)) return veilTotal;
+  return Math.max(1, Math.min(veilTotal, asked));
+}
 
 function tallyCollect(cellKeys, excludeKeys){
   if(!level || level.objective!=='collect' || !level.collect) return;
@@ -1035,6 +1049,7 @@ function getSessionState(){
   if(level.objective==='veil'){
     state.veilTotal = veilTotal;
     state.veilRemaining = veilRemainingCount();
+    state.veilRequired = veilRequiredCount();
   }
   return state;
 }
@@ -1043,7 +1058,7 @@ function checkEndConditions(){
   let won = false;
   if(level.objective==='score'){ won = score >= level.target; }
   else if(level.objective==='collect'){ won = level.collect.every(req => (collectProgress[req.type]||0) >= req.count); }
-  else if(level.objective==='veil'){ won = veilRemainingCount()===0; }
+  else if(level.objective==='veil'){ won = (veilTotal - veilRemainingCount()) >= veilRequiredCount(); }
 
   if(won){
     setTimeout(()=>callbacks.onWin && callbacks.onWin(getSessionState()), 350);
