@@ -30,7 +30,24 @@ js/
   screens.js                     # screen router + HUD chrome + input + level/lives/reward lifecycle
   main.js                         # bootstrap
 server/               # Python backend — see server/README.md
+  app/storage/         # where accounts/saves/leaderboards live: SQLite locally,
+                       # PostgreSQL in production, chosen by DATABASE_URL
+  tests/               # storage + API suite, run against both backends
 ```
+
+## Deploying
+
+The static frontend is served by any static host; the API is `api/index.py`,
+a single serverless function wrapping the same FastAPI app (`vercel.json`
+rewrites `/api/*` to it).
+
+Accounts, cloud saves and leaderboards need a database, because a serverless
+function has no durable filesystem of its own. Set `DATABASE_URL` to a
+PostgreSQL connection string and they work; leave it unset and those
+endpoints answer `501` with an explanation while **everything else — levels,
+chapters, the daily challenge, scoring, and all of guest play — carries on
+normally**, saving progress on the device as it always has. See
+`server/README.md` for the full setup.
 
 ## Running locally
 
@@ -116,5 +133,6 @@ target, finale modifiers) is deterministic per level number, the same way a
 level's design is fixed in most match-3 games while the board itself isn't.
 No amount of replaying makes a level memorizable.
 
-Registration and real-money purchases are intentionally not part of this
-pass.
+Real-money purchases are intentionally not part of this pass. Player
+accounts are — see `server/README.md` for how progress follows a player
+across devices, and what a deployment needs before it can.

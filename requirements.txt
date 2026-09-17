@@ -1,5 +1,14 @@
 # Dependencies for api/index.py, Vercel's Python serverless function.
-# (server/requirements.txt is the fuller local-dev list, incl. uvicorn —
-# not needed here since Vercel invokes the ASGI `app` object directly.)
+# (server/requirements.txt is the fuller local-dev list, incl. uvicorn and
+# pytest — not needed here since Vercel invokes the ASGI `app` object
+# directly.)
 fastapi>=0.110
 pydantic>=2.6
+
+# PostgreSQL driver + connection pool. Required in production: a serverless
+# function has no durable filesystem, so accounts, cloud saves and
+# leaderboards need a real database behind DATABASE_URL (see
+# server/README.md). The `binary` extra ships prebuilt wheels, so there's no
+# libpq/compiler needed in the build image. Unused — and harmless — on a
+# deployment that hasn't been given a DATABASE_URL yet.
+psycopg[binary,pool]>=3.1

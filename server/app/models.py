@@ -6,12 +6,18 @@ from pydantic import BaseModel, Field
 
 
 class ScoreSubmission(BaseModel):
+    """No `player` field, deliberately. Who a score belongs to is read from
+    the request's session token in main.py, never from its body — a
+    body-supplied name is spoofable, and the one this model used to carry
+    defaulted to "Anonymous", which is what every leaderboard row ended up
+    being filed under. Older clients that still send one are unaffected:
+    pydantic ignores unknown fields, so the value is simply dropped."""
+
     mode: str
     levelIndex: int = Field(ge=0)
     score: int = Field(ge=0)
     movesUsed: int = Field(ge=0)
     durationMs: Optional[int] = None
-    player: str = "Anonymous"
 
 
 class AnalyticsEvent(BaseModel):

@@ -56,6 +56,9 @@ async function request(path, options){
     clearTimeout(timer);
   }
 }
+// Exported (as authHeader) for js/api.js's score submission — that's how
+// the server knows whose leaderboard row a run belongs to. Spreads to
+// nothing when signed out, so a guest's request goes out unchanged.
 function authHeaders(){ return token ? { 'Authorization': 'Bearer '+token } : {}; }
 
 function isLoggedIn(){ return !!token; }
@@ -69,7 +72,9 @@ async function register(user, password){
     // device logs in instead and pulls it down.
     body: JSON.stringify({ username:user, password, state: snapshot() }),
   });
-  token = body.token; username = user;
+  // Trust the server's spelling of the name over the one typed here — it
+  // is what the leaderboard will show.
+  token = body.token; username = body.username || user;
   persistToken();
   return body;
 }
@@ -79,7 +84,10 @@ async function login(user, password){
     method:'POST', headers:{ 'Content-Type':'application/json' },
     body: JSON.stringify({ username:user, password }),
   });
-  token = body.token; username = user;
+  // Logins are case-insensitive, so "alice" signs into the account created
+  // as "Alice" — display the canonical spelling the server hands back, not
+  // whatever was typed at the box.
+  token = body.token; username = body.username || user;
   persistToken();
   return body; // { state, updatedAt } -- screens.js decides pull vs. keep-local
 }
@@ -116,4 +124,4 @@ function schedulePush(){
 // system exists at all.
 onSave(schedulePush);
 
-export { isLoggedIn, getUsername, register, login, logout, pullState, pushState };
+export { isLoggedIn, getUsername, authHeaders as authHeader, register, login, logout, pullState, pushState };

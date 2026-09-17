@@ -5,6 +5,8 @@
 // a local generator whenever a call fails or times out, so the app is fully
 // playable offline; the backend just makes the content smarter when reachable.
 
+import { authHeader } from './account.js';
+
 const API_BASE = (window.FAITHMATCH_API_BASE || '/api').replace(/\/$/, '');
 const TIMEOUT_MS = 1500;
 
@@ -29,10 +31,16 @@ function fetchChapter(mode, chapter){
 function fetchDaily(){
   return request('/daily');
 }
+// The session token is what puts a run on the leaderboard under the
+// player's own name. It is deliberately the *only* thing that identifies
+// them: the payload carries no name, because a name in a request body is
+// just a string anyone can post, and the one this used to omit is why every
+// stored score read "Anonymous". Signed out, the header isn't sent and the
+// run is validated and starred but not ranked — guest play is unaffected.
 function submitScore(payload){
   return request('/score', {
     method:'POST',
-    headers:{ 'Content-Type':'application/json' },
+    headers:{ 'Content-Type':'application/json', ...authHeader() },
     body: JSON.stringify(payload),
   }).catch(()=>null); // fire-and-forget from the player's point of view
 }

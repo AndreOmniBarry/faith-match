@@ -4,5 +4,8 @@ server/.venv/
 server/__pycache__/
 server/**/__pycache__/
 server/data.db
+server/tests/
+server/pytest.ini
+.pytest_cache/
 *.pyc
 .DS_Store
