@@ -78,9 +78,16 @@ tools under `tools/` are how that is checked rather than assumed:
 | `verify_legacy_levels.py` | has any level below the endless range moved? |
 | `verify_offline_parity.py` | does `js/content.js` build the same level the server does? |
 | `verify_offline_goals.py` | are the offline fallback's goals still winnable? |
+| `fit_offline_score.py` | refits the offline score target to the simulator |
 
 Run `gen_goal_tables.py` after any change to the curve, the simulator or the
 board shapes, then `goal_report.py sweep` to see what moved.
+
+The offline fallback in `js/content.js` has no simulator, so its score target
+is a fit of the one the simulator measures rather than a guess at its shape.
+`fit_offline_score.py` prints the constants it carries; re-run it and copy
+them over after changing the simulator or the scoring rules, then
+`verify_offline_goals.py` to confirm nothing it generates went unwinnable.
 
 ## Why Python here and not in the client
 

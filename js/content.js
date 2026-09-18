@@ -134,14 +134,96 @@ const VEIL_DENSITY_CEILING = 0.22; // most of the board a veil field may cover, 
 const OFFLINE_COLLECT_PER_MOVE = 2.8;  // pieces of one chased symbol per move, split over the palette
 const OFFLINE_VEIL_PER_MOVE = 0.28;    // veils freed per move, halved again per extra layer
 
-function offlineCollectGoal(moves, colors){
-  return Math.max(3, Math.round(OFFLINE_COLLECT_PER_MOVE * moves / colors) - 1);
+// Cut cells take matches off the board, so every goal read off the move
+// budget has to be read off the board that budget is actually spent on. A
+// twelve-cell cut is 15% of a 9x9, and a goal that ignores it is a goal set
+// 15% over what the board gives — which on a shaped board was the difference
+// between a level clearing in 20% of simulated playouts and in 60%.
+function offlineBoardShare(rows, cols, cutCells){
+  const area = Math.max(1, rows*cols);
+  return Math.max(0.5, (area - (cutCells||0))/area);
 }
-function offlineVeilRequired(moves, cells){
+
+function offlineCollectGoal(moves, colors, share){
+  const raw = OFFLINE_COLLECT_PER_MOVE * moves / colors * (share == null ? 1 : share);
+  return Math.max(3, Math.round(raw) - 1);
+}
+function offlineVeilRequired(moves, cells, share){
   if(!cells.length) return 0;
   const layers = Math.max(1, ...cells.map(c=>c[2]));
-  const asked = Math.round(OFFLINE_VEIL_PER_MOVE * moves / layers);
+  const asked = Math.round(OFFLINE_VEIL_PER_MOVE * moves / layers * (share == null ? 1 : share));
   return Math.max(1, Math.min(cells.length, Math.max(2, asked)));
+}
+
+/* ---------- offline score targets.
+   These used to be `0.72 * ease * (60*moves + rows*cols*colors*9)`, a guess
+   at the shape of a calibrated target that was wrong in both its scale and
+   its sign: it read a wider palette as a *higher* reachable score, when a
+   wider palette is exactly what makes a board score less. It asked 6720 on
+   the 9x9/8-colour/10-move board the server calibrates to 570, and
+   server/tools/verify_offline_goals.py measured 0 of 15 playouts clearing
+   it — on 300-odd levels, the whole offline score and timed range.
+
+   So the target is read the same way every other goal is: off the
+   distribution of what a simulated player actually scores. There are no
+   playouts offline, so what ships here is a closed-form fit of that
+   distribution, measured over 560 boards covering every size, palette, move
+   budget and cut the generator produces — see server/tools/fit_offline_score.py,
+   which prints these five numbers and the error spread. ---------- */
+const OFFLINE_SCORE_K = 46313;         // exp(10.7454) from the log-space fit
+const OFFLINE_SCORE_MOVE_EXP = 0.9869;
+const OFFLINE_SCORE_FREE_EXP = 0.3064;
+const OFFLINE_SCORE_COLOR_A = -6.6673; // colors^(A + B*ln colors) — a wider
+const OFFLINE_SCORE_COLOR_B = 1.3203;  // palette costs less and less per step
+// A goal at win rate w sits at this share of the median, measured off the
+// same 560 ladders: 0.83 of the median at w=0.85, 1.06 at w=0.35, near
+// enough straight in between.
+const OFFLINE_SCORE_RATIO_BASE = 1.20;
+const OFFLINE_SCORE_RATIO_SLOPE = 0.44;
+// The fit is within about +/-9% of the measured median on 90% of boards, and
+// over-predicts by at most 25% on the sparsest one — a wide palette on a
+// heavily cut board. Offline is the degraded path, so the residual is spent
+// on making levels generous rather than on making one of them impossible:
+// this is set low enough that the worst over-prediction still lands under
+// what a simulated player reaches, which costs every other offline score
+// level about a tenth of its target and is the cheaper of the two mistakes.
+const OFFLINE_SCORE_SAFETY = 0.78;
+const OFFLINE_SCORE_MIN = 200;
+// Below the endless range the server still sets score targets with its old
+// `0.72 * ease * median` formula, and at the gentle end of the curve that is
+// the *kinder* of the two — 0.52 of the median at a chapter-1 ease against
+// the quantile read's 0.69. Offline takes whichever asks less: the server's
+// own shape where the server is generous, the measured quantile where the
+// formula would ask more than most players reach. A new player who drops
+// offline in chapter 1 gets the level they would have got online, and nobody
+// at any depth gets one the board cannot pay for.
+const OFFLINE_SCORE_LEGACY_FACTOR = 0.72;
+
+// Mirrors _goal_win_rate() and its two constants in level_gen.py.
+const GOAL_WIN_RATE_EASY = 0.88;       // at the kindest ease in CHAPTER_EASE_TABLE
+const GOAL_WIN_RATE_HARD = 0.55;       // at CHAPTER_EASE_CAP
+function offlineWinRate(ease){
+  const lo = CHAPTER_EASE_TABLE[1], hi = CHAPTER_EASE_CAP;
+  const t = hi <= lo ? 0 : Math.min(1, Math.max(0, (ease - lo)/(hi - lo)));
+  return GOAL_WIN_RATE_EASY + (GOAL_WIN_RATE_HARD - GOAL_WIN_RATE_EASY)*t;
+}
+function offlineScoreMedian(rows, cols, colors, moves, cutCells){
+  const free = Math.max(1, rows*cols - (cutCells||0));
+  const lc = Math.log(colors);
+  return OFFLINE_SCORE_K
+    * Math.pow(moves, OFFLINE_SCORE_MOVE_EXP)
+    * Math.pow(free, OFFLINE_SCORE_FREE_EXP)
+    * Math.exp(lc*(OFFLINE_SCORE_COLOR_A + OFFLINE_SCORE_COLOR_B*lc));
+}
+function offlineScoreTarget(rows, cols, colors, moves, cutCells, ease, winRateShift){
+  // A "Raised Target" finale asks the same board of a smaller share of
+  // players, exactly as win_rate_shift does in _endless_target().
+  const win = Math.max(0.2, offlineWinRate(ease) - (winRateShift || 0));
+  const ratio = OFFLINE_SCORE_RATIO_BASE - OFFLINE_SCORE_RATIO_SLOPE*win;
+  const median = offlineScoreMedian(rows, cols, colors, moves, cutCells);
+  const raw = Math.min(median*ratio*OFFLINE_SCORE_SAFETY,
+                       median*OFFLINE_SCORE_LEGACY_FACTOR*ease);
+  return Math.max(OFFLINE_SCORE_MIN, Math.round(raw/10)*10);
 }
 function chapterEase(chapter){
   if(CHAPTER_EASE_TABLE[chapter] != null) return CHAPTER_EASE_TABLE[chapter];
@@ -243,7 +325,16 @@ function applyFinale(level, shape, mods, rng, symbolCap = SYMBOL_COUNT, objectiv
     const extra = veilCellsFor(shape, rng, 0.08, veilCellKeys(existing));
     level.veil = { ...(level.veil||{}), cells: existing.concat(extra) };
   }else if(constraint==='raisedTarget'){
-    level.target = Math.round(level.target * (symbolCap > SYMBOL_COUNT ? ENDLESS_RAISED_TARGET : 1.4));
+    if(symbolCap > SYMBOL_COUNT){
+      level.target = Math.round(level.target * ENDLESS_RAISED_TARGET);
+      // A note for refitOfflineGoal(), which re-reads a score target off the
+      // board the finale ships and would otherwise undo the constraint.
+      // localFallbackLevel drops it again before the level goes out, so no
+      // level's payload grows a field over this. Mirrors _apply_finale().
+      level.raisedTargetBy = ENDLESS_RAISED_TARGET;
+    }else{
+      level.target = Math.round(level.target * 1.4);
+    }
   }
   else if(constraint==='moreColors') level.colors = Math.max(level.colors, Math.min(symbolCap, level.colors+1));
 }
@@ -294,6 +385,9 @@ const ENDLESS_TWIST_MAX = 3;
 // the top of what the board gives. Legacy finales keep 1.4x — it is part of
 // levels players have already cleared. Mirrors ENDLESS_RAISED_TARGET.
 const ENDLESS_RAISED_TARGET = 1.15;
+// How much of the field a raised target takes off a score level's aim, in
+// win-rate terms. Mirrors ENDLESS_RAISED_TARGET_SHIFT in level_gen.py.
+const ENDLESS_RAISED_TARGET_SHIFT = 0.15;
 const ERA_TITLES = ['The Wilderness','The Highlands','Deep Waters','The Citadel',
   'The Orchard','The Firmament','The Sanctuary','The Pilgrimage','The Covenant',
   'The Dayspring','The Harvest Moon','The Everlasting'];
@@ -457,10 +551,20 @@ function endlessTwists(mode, index, era, t){
 // off playouts; measured there, the count tracks the move budget closely once
 // the board is at its 9x9 ceiling, which is the only board the endless range
 // ever uses.
-const OFFLINE_CASCADE_PER_MOVE = 0.19;
-function offlineCascadeGoal(moves, colors){
-  const raw = OFFLINE_CASCADE_PER_MOVE * moves * (8/Math.max(8, colors));
-  return Math.max(CASCADE_MIN_GOAL, Math.round(raw));
+// Chains per move, and how fast they thin out as the palette widens. A wider
+// palette makes the refill less likely to land a second match, so the penalty
+// is squared rather than linear; and a chain goal is a single-digit integer,
+// so the raw figure is floored rather than rounded — half a chain rounded up
+// is a whole extra chain asked of a board that does not produce it. Against
+// the server's calibrated goals over 134 chain levels this lands on the same
+// number 88 times, one under it 30 times and one over it 16.
+const OFFLINE_CASCADE_PER_MOVE = 0.175;
+const OFFLINE_CASCADE_COLOR_EXP = 2.0;
+function offlineCascadeGoal(moves, colors, share){
+  const raw = OFFLINE_CASCADE_PER_MOVE * moves
+            * Math.pow(8/Math.max(8, colors), OFFLINE_CASCADE_COLOR_EXP)
+            * (share == null ? 1 : share);
+  return Math.max(CASCADE_MIN_GOAL, Math.floor(raw));
 }
 function timedSecondsFor(moves){
   return Math.max(60, Math.round(moves*TIMED_SECONDS_PER_MOVE/5)*5);
@@ -521,11 +625,11 @@ function localFallbackLevel(mode, index){
             position: Math.round(eraPos.t*1000)/1000, relic: eraRelic(eraPos.era) };
   }
 
-  // No simulated playouts offline — approximate the same target shape the
-  // server would calibrate to, from board size/move budget directly.
-  const cellBudget = shape.rows*shape.cols*shape.colors;
-  const rawTarget = 60*shape.moves + cellBudget*9;
-  const target = Math.max(200, Math.round(rawTarget * 0.72 * ease / 10) * 10);
+  // No simulated playouts offline — the target comes from a fit of what the
+  // simulator measures a player scoring on this board. See offlineScoreTarget.
+  const target = offlineScoreTarget(shape.rows, shape.cols, shape.colors,
+                                    shape.moves, mask.length, ease);
+  const share = offlineBoardShare(shape.rows, shape.cols, mask.length);
 
   const boardFactor = mask.length
     ? (shape.rows*shape.cols/81)*(1 + mask.length/(shape.rows*shape.cols))
@@ -548,16 +652,16 @@ function localFallbackLevel(mode, index){
     // Was `14 + min(24, index/3)`, which climbed to 38 and stayed there while
     // the move budget fell to 10 — by level 300 it asked for 40 of a symbol a
     // simulated player gathers 6 of. See offlineCollectGoal above.
-    const goal = offlineCollectGoal(shape.moves, shape.colors);
+    const goal = offlineCollectGoal(shape.moves, shape.colors, share);
     const jitter = Math.round(goal * 0.08);
     level.collect = kinds.map(k=>({ type:k, count: Math.max(3, goal + (Math.floor(rng()*3)-1)*jitter) }));
     level.target = Math.round(target*0.6);
   }else if(objective === 'veil'){
     const cells = veilCellsFor(shape, rng, shape.veilDensity,
       new Set(mask.map(([r,c])=>r+','+c)));
-    level.veil = { cells, required: offlineVeilRequired(shape.moves, cells) };
+    level.veil = { cells, required: offlineVeilRequired(shape.moves, cells, share) };
   }else if(objective === 'cascade'){
-    level.cascade = { required: offlineCascadeGoal(shape.moves, shape.colors) };
+    level.cascade = { required: offlineCascadeGoal(shape.moves, shape.colors, share) };
     level.target = Math.round(target*0.6);
   }else if(objective === 'timed'){
     level.target = Math.round(target*TIMED_TARGET_RELIEF/10)*10;
@@ -566,7 +670,7 @@ function localFallbackLevel(mode, index){
 
   if(twists.length){
     applyTwists(level, shape, twists, mask, rng);
-    refitOfflineGoal(level, objective);
+    refitOfflineGoal(level, objective, share, ease);
   }
   if(isFinale){
     const chapter = Math.floor(index/CHAPTER_SIZE) + 1;
@@ -588,26 +692,37 @@ function localFallbackLevel(mode, index){
     // A finale tightens moves, widens the palette and can layer extra veils
     // on, so the goal is recalibrated on the board the finale actually ships
     // — same reason as get_level() in server/app/level_gen.py.
-    refitOfflineGoal(level, objective);
+    refitOfflineGoal(level, objective, share, ease);
   }
+  delete level.raisedTargetBy;
   return level;
 }
 
 // Re-read a level's goal off the board it actually ships. Shared by the
 // finale path and the endless-twist path, both of which can change the move
 // budget or the palette after the goal was first set.
-function refitOfflineGoal(level, objective){
+function refitOfflineGoal(level, objective, share, ease){
   if(objective === 'collect' && level.collect){
-    const goal = offlineCollectGoal(level.moves, level.colors);
+    const goal = offlineCollectGoal(level.moves, level.colors, share);
     const jitter = Math.round(goal * 0.08);
     level.collect = level.collect.map((req,i)=>({
       type: req.type,
       count: Math.max(3, goal + ((i % 3) - 1) * jitter),
     }));
   }else if(objective === 'veil' && level.veil){
-    level.veil.required = offlineVeilRequired(level.moves, level.veil.cells);
+    level.veil.required = offlineVeilRequired(level.moves, level.veil.cells, share);
   }else if(objective === 'cascade' && level.cascade){
-    level.cascade.required = offlineCascadeGoal(level.moves, level.colors);
+    level.cascade.required = offlineCascadeGoal(level.moves, level.colors, share);
+  }else if(objective === 'score' || objective === 'timed'){
+    // A twist or a finale that tightens the move budget or widens the palette
+    // moves the reachable score too, and a score target left at the old
+    // board's figure is the same unwinnable level by another route.
+    const fitted = offlineScoreTarget(level.rows, level.cols, level.colors,
+                                      level.moves, level.mask ? level.mask.length : 0,
+                                      ease, level.raisedTargetBy ? ENDLESS_RAISED_TARGET_SHIFT : 0);
+    level.target = objective === 'timed'
+      ? Math.max(OFFLINE_SCORE_MIN, Math.round(fitted*TIMED_TARGET_RELIEF/10)*10)
+      : fitted;
   }
 }
 
@@ -679,9 +794,8 @@ function dailyFallbackLevel(dateISO){
   // Same offline target approximation as localFallbackLevel — see its
   // comment: no simulated playouts client-side, so approximate the shape
   // the server would calibrate to, from board size/move budget directly.
-  const cellBudget = shape.rows*shape.cols*shape.colors;
-  const rawTarget = 60*shape.moves + cellBudget*9;
-  const target = Math.max(200, Math.round(rawTarget * 0.72 * DAILY_EASE / 10) * 10);
+  const target = offlineScoreTarget(shape.rows, shape.cols, shape.colors,
+                                    shape.moves, 0, DAILY_EASE);
   const names = ['A Gentle Start','Rising Faith','Steady Hands','Widening Path','Deeper Waters',
     "Refiner's Fire",'Mountain Climb','Radiant Crown','Quiet Trust','Open Doors','Living Water','New Mercies'];
   return {
