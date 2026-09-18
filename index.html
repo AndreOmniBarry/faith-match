@@ -102,6 +102,11 @@
     <div class="dash-grid" id="dash-grid"></div>
     <div class="dash-section-title">Inventory</div>
     <div class="dash-inventory" id="dash-inventory"></div>
+    <!-- Relics only start dropping in the endless range, so this section
+         hides itself until the player has one rather than sitting empty
+         through the whole early game. -->
+    <div class="dash-section-title hidden" id="dash-relics-title">Relics</div>
+    <div class="dash-inventory hidden" id="dash-relics"></div>
     <div class="dash-section-title">Stars Earned</div>
     <div class="dash-stars" id="dash-stars"></div>
   </section>

@@ -50,6 +50,38 @@ to actually be running somewhere with a persistent filesystem** — SQLite's
 static Vercel deploy) don't provide by default. No rate-limiting or
 password-recovery flow yet — known, stated limitations, not silent gaps.
 
+## Endless content, and what keeps it fair
+
+The difficulty curve saturates: the board reaches 9x9 by level ~120, the
+palette reaches 8 symbols by ~240, the move budget hits its floor by ~66 and
+the chapter ease hits its cap at chapter 35. Past level ~510 every level was
+the same level, and the score target did not even climb — it wobbled on
+simulation noise, so level 12,000 could generate easier than level 600.
+
+From chapter 41 (level 600) `level_gen.py` switches to **eras** of 20
+chapters: ease falls to a trough when an era opens and climbs back to the cap
+across it, the objective is drawn per level from a pool that widens each era
+(score, collect, veil, chain, timed), the board is cut to a shape rather than
+grown, the palette widens past the early game's 8 symbols, and each era has
+its own relic to collect. Every level before chapter 41 generates exactly what
+it always did, byte for byte — a level's score target is what its star
+thresholds hang off, so moving one moves a player's stars.
+
+Every goal is read off simulated playouts at the share of players the level's
+ease aims to let finish, including the score target in the endless range. The
+tools under `tools/` are how that is checked rather than assumed:
+
+| Tool | What it answers |
+| --- | --- |
+| `goal_report.py [sweep]` | what share of simulated players clear each level, per objective |
+| `gen_goal_tables.py` | rebuilds the prebuilt ladders in `app/goal_tables.py` |
+| `verify_legacy_levels.py` | has any level below the endless range moved? |
+| `verify_offline_parity.py` | does `js/content.js` build the same level the server does? |
+| `verify_offline_goals.py` | are the offline fallback's goals still winnable? |
+
+Run `gen_goal_tables.py` after any change to the curve, the simulator or the
+board shapes, then `goal_report.py sweep` to see what moved.
+
 ## Why Python here and not in the client
 
 Level calibration runs a batch of simulated playouts (`level_gen.py`) to set

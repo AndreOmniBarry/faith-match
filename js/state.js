@@ -12,6 +12,9 @@ const state = {
   livesUpdatedAt: Date.now(), // regen math lives in js/lives.js
   gems: 0,
   inventory: {}, // itemId -> count, see js/rewards.js
+  relics: {},    // relicId -> count. One collectible per era of the endless
+                 // range, so a player deep in the game is always working
+                 // toward something with a name. See js/rewards.js.
   daily: { lastCompletedDate: null, streak: 0, session: null }, // see js/rewards.js
 };
 
@@ -36,6 +39,7 @@ async function loadState(){
       if(typeof data.livesUpdatedAt === 'number') state.livesUpdatedAt = data.livesUpdatedAt;
       if(typeof data.gems === 'number') state.gems = data.gems;
       if(data.inventory && typeof data.inventory === 'object') Object.assign(state.inventory, data.inventory);
+      if(data.relics && typeof data.relics === 'object') Object.assign(state.relics, data.relics);
       if(data.daily && typeof data.daily === 'object') Object.assign(state.daily, data.daily);
     }
   }catch(e){ /* corrupt or inaccessible storage — start fresh rather than crash */ }
@@ -57,7 +61,8 @@ function snapshot(){
   return {
     soundOn: state.soundOn, modes: state.modes,
     lives: state.lives, livesUpdatedAt: state.livesUpdatedAt,
-    gems: state.gems, inventory: state.inventory, daily: state.daily,
+    gems: state.gems, inventory: state.inventory, relics: state.relics,
+    daily: state.daily,
   };
 }
 
@@ -82,6 +87,7 @@ function replaceState(data){
   if(typeof data.livesUpdatedAt === 'number') state.livesUpdatedAt = data.livesUpdatedAt;
   if(typeof data.gems === 'number') state.gems = data.gems;
   state.inventory = (data.inventory && typeof data.inventory === 'object') ? data.inventory : {};
+  state.relics = (data.relics && typeof data.relics === 'object') ? data.relics : {};
   state.daily = (data.daily && typeof data.daily === 'object') ? data.daily : { lastCompletedDate:null, streak:0, session:null };
   saveState({ silent:true });
 }

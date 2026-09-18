@@ -477,7 +477,12 @@ function renderFullBoard(rowsArg, colsArg, grid, tilesById, onPointerDown){
   let i = 0;
   for(let r=0;r<rows;r++){
     for(let c=0;c<cols;c++){
+      // A cell cut out of a shaped board (level.mask) holds no tile at all —
+      // the board's own backdrop shows through as the gap. Without the guard
+      // this handed createTileEl() an undefined tile on the first shaped
+      // board the player reached.
       const tile = tilesById.get(grid[r][c]);
+      if(!tile) continue;
       const handle = createTileEl(tile, onPointerDown);
       tile.el = handle;
       placeTileInstant(handle, r, c);

@@ -8,7 +8,7 @@
   --rose:#f0836b;
   --cream:#f8f0df;
   --ink:#241a3a;
-  /* 8 symbol colors, spread across distinct hues on purpose — a player has
+  /* 11 symbol colors, spread across distinct hues on purpose — a player has
      to tell them apart at a glance mid-cascade, so no two should share a
      hue family the way the original 6-color set did (cross/heart both
      landed on the same rose-red). */
@@ -20,6 +20,13 @@
   --c-hands:#3fa377;
   --c-flame:#e8793f;
   --c-anchor:#4aa8c9;
+  /* The three deep-era symbols. They only appear once an era widens the
+     palette past 8, on a board that is already busy, so each is picked in a
+     hue the first eight leave empty: brown, yellow-green, and a teal dark
+     enough not to read as a second Anchor. */
+  --c-scroll:#b5854a;
+  --c-olive:#93b23c;
+  --c-water:#1f7d8c;
   --line:#3d3163;
   --veil:#6a6285;
   --striped-glow:#ffffff;

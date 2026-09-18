@@ -25,9 +25,33 @@ const PATHS = {
     <path d="M4 13.5c0 4.4 3.3 7.6 7 8.3v-2.6c-2.4-.7-4.4-2.7-4.4-5.7z"/>
     <path d="M20 13.5c0 4.4-3.3 7.6-7 8.3v-2.6c2.4-.7 4.4-2.7 4.4-5.7z"/>
   `,
+  // The three deep-era symbols. Each is shape-coded as distinctly as the
+  // first eight, for the same reason: a player has to tell them apart at a
+  // glance mid-cascade, and a board wide enough to use these has eleven
+  // symbols on it. Without their own glyphs they all fell through
+  // iconMarkup()'s default and rendered as a second, third and fourth Star.
+  scroll: `
+    <rect x="5.5" y="4.4" width="13" height="15.2" rx="1.2"/>
+    <path d="M5.5 4.4a2.6 2.6 0 000 5.2h2.2V4.4z" opacity="0.55"/>
+    <path d="M18.5 19.6a2.6 2.6 0 000-5.2h-2.2v5.2z" opacity="0.55"/>
+    <rect x="8.4" y="8.6" width="7.2" height="1.5" opacity="0.5"/>
+    <rect x="8.4" y="12" width="7.2" height="1.5" opacity="0.5"/>
+  `,
+  olive: `
+    <path d="M12 22c0-7 2.6-12.6 8-16.6-4.4.4-7.8 2.6-9.8 5.8C8.6 14 8 17.8 8 22z"/>
+    <ellipse cx="7.2" cy="9.4" rx="3.4" ry="2.1" transform="rotate(-32 7.2 9.4)"/>
+    <ellipse cx="16.4" cy="14.6" rx="3.4" ry="2.1" transform="rotate(-32 16.4 14.6)"/>
+    <circle cx="5.6" cy="15.4" r="2.2"/>
+  `,
+  water: `
+    <path d="M12 1.8c4.6 5.6 7 9.4 7 12.6a7 7 0 01-14 0c0-3.2 2.4-7 7-12.6z"/>
+    <path d="M9 14.4a3 3 0 003 3" fill="none" stroke="currentColor" stroke-width="1.6"
+          stroke-linecap="round" opacity="0.45"/>
+  `,
 };
 
-const ORDER = ['cross','dove','heart','star','crown','hands','flame','anchor'];
+const ORDER = ['cross','dove','heart','star','crown','hands','flame','anchor',
+               'scroll','olive','water'];
 
 function iconMarkup(typeIndex){
   const key = ORDER[typeIndex] || 'star';

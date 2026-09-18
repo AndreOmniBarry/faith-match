@@ -15,7 +15,7 @@ import * as rewards from './rewards.js';
 import * as theme from './theme.js';
 import * as splashFx from './splash-fx.js';
 import * as account from './account.js';
-import { SYMBOLS, MODES, modeById, CHAPTER_SIZE, CONTENT_CEILING_LEVELS, getLevel, getChapter, getDaily } from './content.js';
+import { SYMBOLS, MODES, modeById, CHAPTER_SIZE, CONTENT_CEILING_LEVELS, getLevel, getChapter, getDaily, ERA_RELIC_LOOKUP } from './content.js';
 import { iconSVG } from './icons.js';
 
 const $ = (id)=>document.getElementById(id);
@@ -154,6 +154,19 @@ function updateStatusBar(){
   if(s) s.textContent = rewards.getDailyStatus().streak;
 }
 
+// A relic is stored by id alone, so its name and emoji are looked back up
+// from the era table in content.js. An id from a future build that this
+// client has never heard of still renders, as itself, rather than vanishing
+// from a player's collection.
+function relicMeta(id){
+  const found = ERA_RELIC_LOOKUP[id.replace(/-\d+$/, '')];
+  const cycle = /-(\d+)$/.exec(id);
+  if(!found) return { name: id, emoji: '🏺' };
+  if(!cycle) return found;
+  const n = Number(cycle[1]);
+  return { name: found.name + (n <= 3 ? ' ' + 'I'.repeat(n) : ` ${n}`), emoji: found.emoji };
+}
+
 function renderDashboard(){
   updateStatusBar();
   const grid = $('dash-grid');
@@ -187,6 +200,22 @@ function renderDashboard(){
       if(meta) showToast(`${meta.emoji} ${meta.name} — ${meta.desc}`, 2600);
     });
   });
+
+  // Relics: the endless range's collectible. Shown as a set the player is
+  // part-way through, with the eras they have not reached yet left out
+  // entirely rather than shown as locked silhouettes — nothing here should
+  // read as a wall in front of content that is simply further on.
+  const relics = rewards.getRelics();
+  const ownedRelics = Object.entries(relics).filter(([,n])=>n>0);
+  const relicsEl = $('dash-relics'), relicsTitle = $('dash-relics-title');
+  if(relicsEl && relicsTitle){
+    relicsTitle.classList.toggle('hidden', !ownedRelics.length);
+    relicsEl.classList.toggle('hidden', !ownedRelics.length);
+    relicsEl.innerHTML = ownedRelics.map(([id,n])=>{
+      const meta = relicMeta(id);
+      return `<div class="dash-item">${meta.emoji} ${meta.name} <strong>×${n}</strong></div>`;
+    }).join('');
+  }
 
   const starsEl = $('dash-stars');
   starsEl.innerHTML = MODES.filter(m=>!m.daily).map(m=>
@@ -469,7 +498,13 @@ function buildMapLayout(chaptersData, startY, startGlobalIdx){
     // regionEnd marks where this chapter's own background wash stops —
     // lets each stretch of the map read as its own place rather than every
     // chapter sitting on one flat, undifferentiated background.
-    banners.push({ chapterNum, y: bannerY, regionEnd: y });
+    // Past the endless range a chapter belongs to an era, and the era is
+    // what the banner should say — "Chapter 1334" on its own tells a player
+    // nothing about where they are, and the eras are the thing that keeps
+    // changing. Read off the chapter's own levels, so a mode still on the
+    // pre-endless curve shows exactly what it always did.
+    const era = levels.find(l=>l && l.era)?.era;
+    banners.push({ chapterNum, y: bannerY, regionEnd: y, eraTitle: era ? era.title : null });
   });
   return { nodes, banners, endY: y, endGlobalIdx: globalIdx };
 }
@@ -523,7 +558,7 @@ function appendMapBatch(track, mode, chaptersData){
     el.style.setProperty('--band-color', theme.chapterColor(b.chapterNum));
     el.innerHTML = `
       <span class="band-medallion">${iconSVG((b.chapterNum-1)%SYMBOLS.length)}</span>
-      <span class="band-text">Chapter ${b.chapterNum}</span>
+      <span class="band-text">Chapter ${b.chapterNum}${b.eraTitle ? ` · ${b.eraTitle}` : ''}</span>
       <span class="band-rule"></span>
     `;
     track.appendChild(el);
@@ -709,6 +744,14 @@ function veilRequiredFor(level){
   return Math.max(1, Math.min(n, asked));
 }
 
+// Mirrors engine.js's cascadeRequiredCount(): a level generated before the
+// Chain of Grace objective existed, or fetched from an older cache, has no
+// calibrated figure, and falling back to 0 would mean a level already won.
+function cascadeRequiredFor(level){
+  const asked = level.cascade?.required;
+  return asked > 0 ? asked : 2;
+}
+
 function taskDescriptionFor(level){
   const movesTxt = `${level.moves} move${level.moves===1?'':'s'}`;
   let sentence;
@@ -723,10 +766,16 @@ function taskDescriptionFor(level){
     const need = veilRequiredFor(level);
     const what = need >= n ? `all ${n} veiled tile${n===1?'':'s'}` : `${need} of the ${n} veiled tiles`;
     sentence = `Free ${what} — match beside a veiled tile to crack it, within ${movesTxt}.`;
+  }else if(level.objective==='cascade'){
+    const need = cascadeRequiredFor(level);
+    sentence = `Set off ${need} chain reaction${need===1?'':'s'} within ${movesTxt} — a match that knocks pieces down into another match counts.`;
+  }else if(level.objective==='timed'){
+    sentence = `Score ${level.target}+ points before the clock runs out.`;
   }else{
     sentence = `Score ${level.target}+ points within ${movesTxt}.`;
   }
-  if(level.timedSeconds) sentence += ` You also have ${formatTime(level.timedSeconds)} on the clock.`;
+  if(level.timedSeconds && level.objective!=='timed') sentence += ` You also have ${formatTime(level.timedSeconds)} on the clock.`;
+  if(level.mask && level.mask.length) sentence += ` The board is cut to a shape — pieces never fall through the gaps.`;
   if(level.finale) sentence = `Stage Finale — ${sentence}`;
   return sentence;
 }
@@ -740,6 +789,10 @@ function objectiveAreaHTML(level){
   if(level.objective==='veil'){
     return `<div class="progress-wrap"><div class="progress-track"><div class="progress-fill" id="progress-fill"></div></div>
       <div class="progress-label"><span id="progress-current">0 freed</span><span id="progress-target">of ${veilRequiredFor(level)}</span></div></div>`;
+  }
+  if(level.objective==='cascade'){
+    return `<div class="progress-wrap"><div class="progress-track"><div class="progress-fill" id="progress-fill"></div></div>
+      <div class="progress-label"><span id="progress-current">0 chains</span><span id="progress-target">of ${cascadeRequiredFor(level)}</span></div></div>`;
   }
   return `<div class="progress-wrap"><div class="progress-track"><div class="progress-fill" id="progress-fill"></div></div>
     <div class="progress-label"><span id="progress-current">0</span><span id="progress-target">Target ${level.target}</span></div></div>`;
@@ -767,7 +820,13 @@ function renderGameChrome(level){
   const mode = modeById(level.mode) || { name:'Faith Match' };
   $('game-level-name').textContent = level.mode==='daily-blessing'
     ? "Today's Blessing" : `LEVEL ${level.index+1} · ${level.name}`;
-  $('game-mode-name').textContent = level.finale ? `${mode.name} · Stage Finale` : mode.name;
+  // Past the endless range a level belongs to an era as well as a mode, and
+  // the era is the thing that changed — showing only "Grace Path" for the
+  // ten-thousandth level running is most of why the deep game read as one
+  // long identical stretch.
+  const era = level.era ? ` · ${level.era.title}` : '';
+  $('game-mode-name').textContent = level.finale
+    ? `${mode.name}${era} · Stage Finale` : `${mode.name}${era}`;
   updateGemsHUD(false);
 
   const task = taskDescriptionFor(level);
@@ -841,6 +900,12 @@ function updateHUD(s){
     const fill = $('progress-fill'); const cur = $('progress-current');
     if(fill) fill.style.width = pct2+'%';
     if(cur) cur.textContent = Math.min(freed, need)+' freed';
+  }else if(s.objective==='cascade'){
+    const need = s.cascadeRequired > 0 ? s.cascadeRequired : 1;
+    const landed = s.cascadeCount || 0;
+    const fill = $('progress-fill'); const cur = $('progress-current');
+    if(fill) fill.style.width = Math.min(100, Math.round((Math.min(landed,need)/need)*100)) + '%';
+    if(cur) cur.textContent = Math.min(landed, need) + (landed===1 ? ' chain' : ' chains');
   }else{
     const fill = $('progress-fill'); const cur = $('progress-current');
     const pct3 = Math.min(100, Math.round((s.score/Math.max(1,s.target))*100));
@@ -1128,6 +1193,13 @@ function useInventoryItem(id){
     closeTray();
     return;
   }
+  if(id==='stonecutter'){
+    if(!rewards.useItem('stonecutter')) return;
+    const ok = engine.useStonecutter();
+    if(!ok){ rewards.addItem('stonecutter', 1); showToast('This board has no cut-out cells to open.', 1600); return; }
+    closeTray();
+    return;
+  }
 }
 
 /* ============================= GAME: lives + continue ============================= */
@@ -1278,12 +1350,18 @@ function onLevelWin(s){
   }else if(currentLevel.index!=null){
     state.recordCompletion(currentLevel.mode, currentLevel.index, stars);
     const chapter = Math.floor(currentLevel.index/CHAPTER_SIZE) + 1;
-    const levelReward = rewards.rewardForLevel(stars, chapter);
-    if(levelReward.gems || levelReward.item){
+    const levelReward = rewards.rewardForLevel(stars, chapter, currentLevel);
+    if(levelReward.gems || levelReward.item || levelReward.relic){
       let line = levelReward.gems ? `💎${levelReward.gems}` : '';
       if(levelReward.item){
         const meta = rewards.ITEMS[levelReward.item];
         line += (line ? ' + ' : '') + `${meta.emoji} ${meta.name}`;
+      }
+      if(levelReward.relic){
+        // Named, and with the running count, because a relic is a set to
+        // finish rather than a number to watch climb.
+        const r = levelReward.relic;
+        line += (line ? ' + ' : '') + `${r.emoji} ${r.name} ×${rewards.getRelicCount(r.id)}`;
       }
       rewardLines.push(line);
       audio.playRewardChime();

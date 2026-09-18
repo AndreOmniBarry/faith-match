@@ -11,13 +11,19 @@ globalThis.window = globalThis.window || {};
 const { localFallbackLevel } = await import('../../js/content.js');
 
 // The onboarding, the stretch where both modes used to become unwinnable, the
-// plateau, and a couple of absurdly deep chapters — the same spread
+// old plateau, then the endless range: the opening and the peak of the first
+// eras, and a couple of absurdly deep chapters — the same spread
 // server/tools/goal_report.py sweeps.
-const CHAPTERS = [1, 2, 3, 4, 5, 8, 10, 14, 20, 30, 40, 60, 80, 120, 200, 334, 1000];
+const CHAPTERS = [1, 2, 3, 4, 5, 8, 10, 14, 20, 30, 40,
+                  41, 45, 50, 55, 60, 61, 70, 80, 101, 110, 120, 161, 180,
+                  334, 500, 1000];
 const CHAPTER_SIZE = 15;
 
 const out = {};
-for (const mode of ['harvest', 'refiners-fire']) {
+// All three modes, not just the two with a non-score objective: past the
+// endless range every mode's chapter mixes objectives, so Grace Path is no
+// longer "the one where nothing is ever collected".
+for (const mode of ['grace-path', 'harvest', 'refiners-fire']) {
   for (const chapter of CHAPTERS) {
     for (let slot = 0; slot < CHAPTER_SIZE; slot++) {
       const index = (chapter - 1) * CHAPTER_SIZE + slot;

@@ -16,7 +16,9 @@ the samples they were read off.
 levels, and lists any level a simulated average player clears less than
 FLOOR_WIN_RATE of the time — the check that catches a goal the curve has
 walked out from under, which is how Harvest and Refiner's Fire became
-unwinnable in the first place.
+unwinnable in the first place. It covers every objective and every mode,
+including the endless range past chapter 41, where a mode's chapter mixes
+five kinds of level rather than repeating one.
 """
 
 from __future__ import annotations
@@ -31,11 +33,20 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from app import level_gen as lg  # noqa: E402
 
 INDICES = [0, 5, 14, 20, 30, 44, 50, 71, 100, 130, 150, 200, 250, 299,
-           400, 500, 600, 900, 1200, 2000, 5000]
+           400, 500, 600, 750, 900, 1050, 1200, 1500, 2400, 5000, 20000]
 
 # Chapters swept level by level: the onboarding, the stretch where both modes
-# used to break, the plateau, and a couple of absurdly deep ones.
-SWEEP_CHAPTERS = [1, 2, 3, 4, 5, 8, 10, 14, 20, 30, 40, 60, 80, 120, 200, 334, 1000]
+# used to break, the old plateau, then the endless range — the opening of the
+# first few eras, their peaks, and a couple of absurdly deep ones. An era's
+# trough and its peak are different levels of difficulty by design, so both
+# ends of one have to be in here or the sweep only ever measures the easy half.
+SWEEP_CHAPTERS = [1, 2, 3, 4, 5, 8, 10, 14, 20, 30, 40,
+                  41, 45, 50, 55, 60,          # era 0: open, climb, peak
+                  61, 70, 80,                  # era 1
+                  101, 110, 120,               # era 3
+                  161, 180,                    # era 6
+                  334, 500, 1000]
+SWEEP_MODES = ["grace-path", "harvest", "refiners-fire"]
 
 # No level should sit below this for a simulated average player, who plays no
 # specials, no Combo Surge and no items — a real player has all three, so this
@@ -48,89 +59,122 @@ def old_collect_goal(index: int) -> int:
     return 14 + min(24, index // 3)
 
 
-def verify_collect(index: int, playouts: int) -> dict:
-    lvl = lg.get_level("harvest", index)
-    reqs = lvl["collect"] or []
+def _mask_of(lvl: dict) -> tuple:
+    return tuple((r, c) for r, c in (lvl.get("mask") or []))
+
+
+def verify_level(mode: str, index: int, playouts: int) -> dict:
+    """Play one level `playouts` times and report how often it was cleared.
+
+    Dispatches on the level's own objective rather than on its mode, because
+    past ENDLESS_START_CHAPTER a mode's chapter mixes objectives — a Harvest
+    chapter at depth holds gathering, veil, chain, timed and score levels, and
+    a report that assumed one task per mode would simply not look at four
+    fifths of them.
+
+    The simulated player plays no specials, no Combo Surge and no items, all
+    of which a real player has, so every rate here is a floor.
+    """
+    lvl = lg.get_level(mode, index)
+    objective = lvl["objective"]
+    mask = _mask_of(lvl)
+    board = (lvl["rows"], lvl["cols"], lvl["colors"], lvl["moves"])
+    cells = (lvl.get("veil") or {}).get("cells") or []
+    reqs = lvl.get("collect") or []
     wanted = frozenset(r["type"] for r in reqs)
     needs = {r["type"]: r["count"] for r in reqs}
+
     wins = 0
-    scarcest = []
+    reached = []
     for p in range(playouts):
-        rng = random.Random(lg._seed(f"verify::collect::{index}", p))
-        _, collected, _, _ = lg._simulate_playout(
-            lvl["rows"], lvl["cols"], lvl["colors"], lvl["moves"], rng,
-            objective="collect", wanted=wanted)
-        scarcest.append(min(collected.get(k, 0) for k in wanted))
-        if all(collected.get(k, 0) >= n for k, n in needs.items()):
-            wins += 1
+        rng = random.Random(lg._seed(f"verify::{objective}::{mode}::{index}", p))
+        score, collected, left, total, chains = lg._simulate_playout(
+            *board, rng,
+            objective=objective if objective in ("collect", "veil") else "score",
+            wanted=wanted, veil_cells=cells if objective == "veil" else None,
+            blocked=mask)
+        if objective == "collect":
+            reached.append(min(collected.get(k, 0) for k in wanted) if wanted else 0)
+            if all(collected.get(k, 0) >= n for k, n in needs.items()):
+                wins += 1
+        elif objective == "veil":
+            reached.append(total - left)
+            if total - left >= (lvl.get("veil") or {}).get("required", 0):
+                wins += 1
+        elif objective == "cascade":
+            landed = sum(1 for d in chains if d >= lg.CASCADE_MIN_DEPTH)
+            reached.append(landed)
+            if landed >= lvl["cascade"]["required"]:
+                wins += 1
+        else:                       # score and timed
+            reached.append(score)
+            if score >= lvl["target"]:
+                wins += 1
+
+    asks = {"collect": sorted(needs.values()),
+            "veil": (lvl.get("veil") or {}).get("required", 0),
+            "cascade": (lvl.get("cascade") or {}).get("required", 0)}.get(
+                objective, lvl["target"])
     return {
+        "mode": mode,
         "index": index,
-        "board": f'{lvl["rows"]}x{lvl["cols"]}/{lvl["colors"]}c/{lvl["moves"]}m',
-        "old": old_collect_goal(index),
-        "new": sorted(needs.values()),
-        "reachable": int(statistics.median(scarcest)),
+        "objective": objective,
+        "board": f'{lvl["rows"]}x{lvl["cols"]}/{lvl["colors"]}c/{lvl["moves"]}m'
+                 + (f'/{len(mask)}cut' if mask else ""),
+        "era": (lvl.get("era") or {}).get("title", "-"),
+        "asks": asks,
+        "reachable": int(statistics.median(reached)),
         "win_rate": wins / playouts,
         "aim": lg._goal_win_rate(lvl["calibration"]["difficultyEase"]),
     }
+
+
+def verify_collect(index: int, playouts: int) -> dict:
+    return verify_level("harvest", index, playouts)
 
 
 def verify_veil(index: int, playouts: int) -> dict:
-    lvl = lg.get_level("refiners-fire", index)
-    cells = (lvl.get("veil") or {}).get("cells") or []
-    required = (lvl.get("veil") or {}).get("required") or 0
-    wins = 0
-    freed_all = 0
-    freed = []
-    for p in range(playouts):
-        rng = random.Random(lg._seed(f"verify::veil::{index}", p))
-        _, _, left, total = lg._simulate_playout(
-            lvl["rows"], lvl["cols"], lvl["colors"], lvl["moves"], rng,
-            objective="veil", veil_cells=cells)
-        freed.append(total - left)
-        if total - left >= required:
-            wins += 1
-        if left == 0:
-            freed_all += 1
-    return {
-        "index": index,
-        "board": f'{lvl["rows"]}x{lvl["cols"]}/{lvl["colors"]}c/{lvl["moves"]}m',
-        "placed": len(cells),
-        "old": len(cells),          # the old goal was "free every one of them"
-        "new": required,
-        "reachable": int(statistics.median(freed)),
-        "win_rate": wins / playouts,
-        "old_win_rate": freed_all / playouts,
-        "aim": lg._goal_win_rate(lvl["calibration"]["difficultyEase"]),
-    }
+    return verify_level("refiners-fire", index, playouts)
 
 
 def sweep(playouts: int) -> int:
-    print(f"SWEEP — every level of {len(SWEEP_CHAPTERS)} chapters, "
-          f"{playouts} playouts each, floor {FLOOR_WIN_RATE*100:.0f}%")
+    print(f"SWEEP — every level of {len(SWEEP_CHAPTERS)} chapters in "
+          f"{len(SWEEP_MODES)} modes, {playouts} playouts each, "
+          f"floor {FLOOR_WIN_RATE*100:.0f}%")
     failures = []
-    for mode, check in (("harvest", verify_collect), ("refiners-fire", verify_veil)):
+    by_objective: dict = {}
+    for mode in SWEEP_MODES:
         rates = []
         for chapter in SWEEP_CHAPTERS:
             start = (chapter - 1) * lg.CHAPTER_SIZE
             for slot in range(lg.CHAPTER_SIZE):
-                r = check(start + slot, playouts)
+                r = verify_level(mode, start + slot, playouts)
                 rates.append(r["win_rate"])
+                by_objective.setdefault(r["objective"], []).append(r["win_rate"])
                 if r["win_rate"] < FLOOR_WIN_RATE:
-                    failures.append((mode, r))
+                    failures.append(r)
         rates.sort()
         print(f'  {mode}: {len(rates)} levels, '
               f'worst {rates[0]*100:.0f}%, '
               f'5th pct {rates[len(rates)//20]*100:.0f}%, '
               f'median {rates[len(rates)//2]*100:.0f}%, '
               f'best {rates[-1]*100:.0f}%')
+    print("  by objective:")
+    for objective, rates in sorted(by_objective.items()):
+        rates.sort()
+        print(f'    {objective:<8} {len(rates):>5} levels, '
+              f'worst {rates[0]*100:>3.0f}%, '
+              f'median {rates[len(rates)//2]*100:>3.0f}%')
     if not failures:
         print(f"  no level below the {FLOOR_WIN_RATE*100:.0f}% floor")
         return 0
     print(f"  {len(failures)} level(s) below the floor:")
-    for mode, r in failures:
-        print(f'    {mode} level {r["index"]} {r["board"]}: '
-              f'asks {r["new"]}, reachable {r["reachable"]}, '
+    for r in failures[:40]:
+        print(f'    {r["mode"]} level {r["index"]} [{r["objective"]}] {r["board"]}: '
+              f'asks {r["asks"]}, reachable {r["reachable"]}, '
               f'win {r["win_rate"]*100:.0f}% (aim {r["aim"]*100:.0f}%)')
+    if len(failures) > 40:
+        print(f"    ... and {len(failures) - 40} more")
     return 1
 
 

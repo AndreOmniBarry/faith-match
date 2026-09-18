@@ -17,12 +17,19 @@ const FALL_MS = 300;
 let rows = 8, cols = 8, colorCount = 6;
 let grid = [];
 let veilGrid = [];
+// Cells cut out of a shaped board (level.mask). A blocked cell holds no tile
+// at all: nothing spawns there, nothing falls into or through it, and no match
+// crosses it. It is not a veil — there is nothing to free — so every
+// veil-clearing path (Halo Bomb, Combo Surge, Refiner's Ward, the Hammer)
+// leaves it alone by construction, because its veilGrid entry stays 0.
+let blockedGrid = [];
 let tilesById = new Map();
 let nextId = 1;
 let level = null;
 let score = 0, movesLeft = 0, movesUsed = 0, comboStep = 0;
 let collectProgress = {};
 let veilTotal = 0;
+let cascadeCount = 0;   // moves that set off a chain of CASCADE_MIN_DEPTH waves
 let busy = false;
 let swapAnchorCells = null;
 let callbacks = {};
@@ -42,6 +49,10 @@ let wildcardUsed = false, shrinkTriggered = false;
 const FIVE_MATCH_FLAVORS = ['colorbomb','comet','frostbloom'];
 const TIER_PRIORITY = { striped:1, wrapped:2, comet:3, frostbloom:3, colorbomb:4, halo:5 };
 const HALO_GEM_BONUS = 3;
+// A "chain" for the Chain of Grace objective: a match that knocks something
+// down into a further match. Must match CASCADE_MIN_DEPTH in
+// server/app/level_gen.py, which is what the goal was calibrated against.
+const CASCADE_MIN_DEPTH = 2;
 
 const sleep = (ms)=>new Promise(res=>setTimeout(res,ms));
 const rand = (n)=>Math.floor(Math.random()*n);
@@ -51,17 +62,26 @@ function isBusy(){ return busy; }
 
 /* ============================= GRID HELPERS ============================= */
 
+function isBlocked(r,c){
+  if(r<0||r>=rows||c<0||c>=cols) return true;
+  return blockedGrid[r] ? !!blockedGrid[r][c] : false;
+}
 function typeAt(r,c){
   if(r<0||r>=rows||c<0||c>=cols) return -1;
   if(veilGrid[r][c] > 0) return -1; // veiled cells are invisible to matching until freed
+  if(isBlocked(r,c)) return -1;     // ...and a cell cut out of the board never has anything to match
   const id = grid[r][c];
   if(id==null) return -1;
   return tilesById.get(id).type;
 }
 function isSwappable(r,c){
   if(r<0||r>=rows||c<0||c>=cols) return false;
+  if(isBlocked(r,c)) return false;
   return veilGrid[r][c] === 0;
 }
+// One test for "nothing may pass through here", used by the collapse and the
+// reshuffle. Veils and cut-out cells behave identically for both.
+function isObstacle(r,c){ return veilGrid[r][c] > 0 || isBlocked(r,c); }
 function isAdjacent(a,b){
   const dr = Math.abs(a.r-b.r), dc = Math.abs(a.c-b.c);
   return (dr+dc)===1;
@@ -163,10 +183,13 @@ function buildInitialBoard(lvl){
   do{
     grid = Array.from({length:rows}, ()=>Array(cols).fill(null));
     veilGrid = Array.from({length:rows}, ()=>Array(cols).fill(0));
+    blockedGrid = Array.from({length:rows}, ()=>Array(cols).fill(false));
+    (lvl.mask||[]).forEach(([r,c])=>{ if(r<rows && c<cols) blockedGrid[r][c] = true; });
     tilesById.clear();
     nextId = 1;
     for(let r=0;r<rows;r++){
       for(let c=0;c<cols;c++){
+        if(blockedGrid[r][c]) continue;   // a cut-out cell gets no tile, ever
         let type, tries=0;
         do{
           type = rand(colorCount);
@@ -521,6 +544,14 @@ function veilRequiredCount(){
   return Math.max(1, Math.min(veilTotal, asked));
 }
 
+// Chain of Grace's goal, calibrated server-side (level.cascade.required). An
+// older client, or a level generated before the objective existed, falls back
+// to a floor rather than to "zero chains", which would win on the first move.
+function cascadeRequiredCount(){
+  const asked = level && level.cascade ? level.cascade.required : 0;
+  return asked > 0 ? asked : 2;
+}
+
 function tallyCollect(cellKeys, excludeKeys){
   if(!level || level.objective!=='collect' || !level.collect) return;
   const wanted = new Set(level.collect.map(req=>req.type));
@@ -607,7 +638,7 @@ function collapseAndRefill(){
   for(let c=0;c<cols;c++){
     let segBottom = rows-1;
     for(let r=rows-1;r>=0;r--){
-      if(veilGrid[r][c] > 0){
+      if(isObstacle(r,c)){
         collapseColumnSegment(c, r+1, segBottom, landedTiles);
         segBottom = r-1;
       }
@@ -627,7 +658,7 @@ function reshuffleBoard(){
   // with no actual guarantee the result was playable.
   const candidateAt = (r,c)=>{
     if(r<0||r>=rows||c<0||c>=cols) return -1;
-    if(veilGrid[r][c] > 0) return -1;
+    if(isObstacle(r,c)) return -1;
     return types[r*cols+c];
   };
   let attempts=0;
@@ -646,7 +677,10 @@ function reshuffleBoard(){
   let idx=0;
   for(let r=0;r<rows;r++){
     for(let c=0;c<cols;c++){
-      if(veilGrid[r][c]>0){ idx++; continue; } // leave veiled cells' candy untouched
+      // Veiled cells keep their piece (the player has to free it) and a
+      // cut-out cell has no piece to redeal — without the second test this
+      // dereferenced a tile that was never created.
+      if(isObstacle(r,c)){ idx++; continue; }
       const id = grid[r][c];
       const t = tilesById.get(id);
       const newType = types[idx++];
@@ -803,6 +837,15 @@ async function resolveLoop(seed){
 
     const toRemove = [...matchedSet].filter(k=>!creationKeys.has(k));
     await clearCells(toRemove);
+  }
+
+  // comboStep now holds how many waves this one action set off. That is the
+  // Chain of Grace objective's unit: a match that knocks something down into
+  // a further match. Counted here rather than per wave so one long cascade
+  // counts once, which is what the goal was calibrated against.
+  if(comboStep >= CASCADE_MIN_DEPTH){
+    cascadeCount++;
+    if(level && level.objective==='cascade') notifyHUD();
   }
 
   if(!hasPossibleMove()){
@@ -1051,14 +1094,22 @@ function getSessionState(){
     state.veilRemaining = veilRemainingCount();
     state.veilRequired = veilRequiredCount();
   }
+  if(level.objective==='cascade'){
+    state.cascadeCount = cascadeCount;
+    state.cascadeRequired = cascadeRequiredCount();
+  }
   return state;
 }
 
 function checkEndConditions(){
   let won = false;
-  if(level.objective==='score'){ won = score >= level.target; }
+  // 'timed' is a score level whose pressure is the clock rather than the move
+  // budget; running the clock out is a loss and screens.js owns that, so the
+  // win test is the same one 'score' uses.
+  if(level.objective==='score' || level.objective==='timed'){ won = score >= level.target; }
   else if(level.objective==='collect'){ won = level.collect.every(req => (collectProgress[req.type]||0) >= req.count); }
   else if(level.objective==='veil'){ won = (veilTotal - veilRemainingCount()) >= veilRequiredCount(); }
+  else if(level.objective==='cascade'){ won = cascadeCount >= cascadeRequiredCount(); }
 
   if(won){
     setTimeout(()=>callbacks.onWin && callbacks.onWin(getSessionState()), 350);
@@ -1303,6 +1354,44 @@ async function useSkyHook(a, b){
 // (the Hammer fully destroys one veil instantly; this gently thins every
 // veil on the board by one layer instead), aimed at Refiner's Fire's
 // toughest boards specifically.
+// Stonecutter: opens one cut-out cell of a shaped board for the rest of the
+// level, and drops a piece into it. Chooses the cell that connects the most
+// play — the one with the most live neighbours — because the point of a
+// shaped board is the regions it separates, and the useful cut to make is the
+// one that joins two of them back up.
+function useStonecutter(){
+  if(busy) return false;
+  let best = null, bestScore = -1;
+  for(let r=0;r<rows;r++){
+    for(let c=0;c<cols;c++){
+      if(!isBlocked(r,c)) continue;
+      let live = 0;
+      [[-1,0],[1,0],[0,-1],[0,1]].forEach(([dr,dc])=>{
+        const rr=r+dr, cc=c+dc;
+        if(rr>=0&&rr<rows&&cc>=0&&cc<cols&&!isBlocked(rr,cc)) live++;
+      });
+      if(live > bestScore){ bestScore = live; best = [r,c]; }
+    }
+  }
+  if(!best) return false;
+  const [r,c] = best;
+  blockedGrid[r][c] = false;
+  if(level && level.mask) level.mask = level.mask.filter(([mr,mc])=>!(mr===r && mc===c));
+  const id = nextId++;
+  const tile = { id, r, c, type: rand(colorCount), special:null, veil:0, el:null };
+  tilesById.set(id, tile);
+  const el = render.createTileEl(tile, onTilePointerDown);
+  tile.el = el;
+  render.placeTileInstant(el, r-1, c);
+  render.setTileTransform(el, r, c);
+  grid[r][c] = id;
+  effects.flash('var(--gold-soft)', 380);
+  audio.playVeilCrack();
+  callbacks.onToast && callbacks.onToast('⛏️ Stonecutter! The board opens up.');
+  notifyHUD();
+  return true;
+}
+
 function useRefinersWard(){
   if(busy) return false;
   let cracked = 0;
@@ -1350,6 +1439,7 @@ async function startLevel(lvl, boardEl){
   score = 0; comboStep = 0; busy = false; swapAnchorCells = null;
   movesLeft = lvl.moves; movesUsed = 0;
   collectProgress = {};
+  cascadeCount = 0;
   comboMeter = 0; wildcardUsed = false; shrinkTriggered = false; pendingSurge = false;
 
   render.setBoardEl(boardEl);
@@ -1394,4 +1484,5 @@ export {
   addMoves, forceLose,
   getComboMeter, popComboMeter,
   useHammer, useRainbowShuffle, useColorBombGift, useSkyHook, useRefinersWard,
+  useStonecutter,
 };

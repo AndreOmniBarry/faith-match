@@ -33,9 +33,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app import level_gen as lg  # noqa: E402
 
-# Levels to enumerate shapes over. The curve saturates long before this; the
-# margin is there so a future curve tweak is still covered without a thought.
-SCAN_LEVELS = 3000
+# Levels to enumerate shapes over. The legacy curve saturates long before
+# this; past ENDLESS_START_CHAPTER the era system keeps producing new boards,
+# so the scan has to run deep enough to cover the range players will actually
+# reach. Boards past the scan still work — _probe_collect_ladder() is the live
+# fallback — they are just paid for on the request instead of at build time.
+SCAN_LEVELS = 9000
+MODES = ("grace-path", "harvest", "refiners-fire")
 
 OUT = os.path.join(os.path.dirname(__file__), "..", "app", "goal_tables.py")
 
@@ -52,57 +56,90 @@ players actually reached.
 Veil goals are not here: they depend on a level's individual veil layout, not
 just its board, so they are probed per level. See level_gen._veil_ladder().
 
-Key: COLLECT_LADDERS  (rows, cols, colors, moves)
+Keys:
+  COLLECT_LADDERS         (rows, cols, colors, moves)                  full board
+  MASKED_COLLECT_LADDERS  (rows, cols, colors, moves, mask)            shaped board
+  CASCADE_LADDERS         (rows, cols, colors, moves, mask)            Chain of Grace
+  SCORE_LADDERS           (rows, cols, colors, moves, mask)            endless score/timed
 
-Built with GOAL_SIM_PLAYOUTS = {playouts}, SIM_RANDOM_MOVE_CHANCE = {randchance}.
-Covering every board shape _curve_shape() produces over levels 0..{scan}.
+`mask` is the sorted tuple of blocked (row, col) cells an endless level's
+board is cut to. A mask removes cells, which removes matches, so the full
+rectangle's ladder does not describe it.
+
+Built with GOAL_SIM_PLAYOUTS = {playouts}, CASCADE_SIM_PLAYOUTS = {cascadeplayouts},
+SCORE_SIM_PLAYOUTS = {scoreplayouts},
+SIM_RANDOM_MOVE_CHANCE = {randchance}.
+Covering every board every mode produces over levels 0..{scan}.
 """
 
 '''
 
 
 def shape_keys():
-    """Every board a collect goal can be calibrated on.
+    """Every board a collect or cascade goal can be calibrated on.
 
-    A level's goal is calibrated on the board it actually ships, which for a
-    stage finale means after its modifiers have tightened the move budget or
-    widened the palette — so each of those variants is a key of its own.
-    Enumerating them here is what keeps a cold request off the live probe path.
+    The enumeration comes from level_gen.goal_shape_keys(), which reads the
+    generator's own rules — the board the curve produced, plus the boards a
+    stage finale's or an endless twist's modifiers ship after tightening the
+    move budget or widening the palette. Asking the generator beats keeping a
+    second copy of those rules in this script, which is exactly the kind of
+    copy that goes quietly stale. It runs no simulation, so scanning every
+    mode over nine thousand levels costs about two seconds.
     """
-    collect = set()
-    for index in range(SCAN_LEVELS):
-        chapter = index // lg.CHAPTER_SIZE + 1
-        slot = index % lg.CHAPTER_SIZE
-        is_finale = slot >= lg.CHAPTER_SIZE - 3
-        ease = lg._chapter_ease(chapter) + (lg.FINALE_EASE_BUMP if is_finale else 0.0)
-        ease = min(lg.CHAPTER_EASE_CAP, ease)
-        shape = lg._ease(lg._curve_shape(index), ease)
+    collect, masked, cascade, score = set(), set(), set(), set()
+    for mode in MODES:
+        for index in range(SCAN_LEVELS):
+            for objective, rows, cols, colors, moves, mask in lg.goal_shape_keys(mode, index):
+                if objective == "cascade":
+                    cascade.add((rows, cols, colors, moves, mask))
+                elif objective in ("score", "timed"):
+                    score.add((rows, cols, colors, moves, mask))
+                elif mask:
+                    masked.add((rows, cols, colors, moves, mask))
+                else:
+                    collect.add((rows, cols, colors, moves))
+    # An endless level's board can carry any of the objectives depending only
+    # on its seed, so every board one objective reaches, the others reach too.
+    # Building each table over the union rather than over the levels that
+    # happened to draw that objective is what stops a cold request falling
+    # through to a live probe because of a coin flip.
+    endless = cascade | score
+    return sorted(collect), sorted(masked), sorted(endless), sorted(endless)
 
-        move_variants = {shape["moves"]}
-        color_variants = {shape["colors"]}
-        if is_finale:
-            move_variants.add(max(lg.MIN_MOVES_FLOOR, round(shape["moves"] * 0.85)))
-            color_variants.add(min(lg.SYMBOL_COUNT, shape["colors"] + 1))
 
-        for moves in move_variants:
-            for colors in color_variants:
-                collect.add((shape["rows"], shape["cols"], colors, moves))
-    return sorted(collect)
+def _emit(lines, name, keys, probe, note):
+    lines.append(f"# {note}\n{name} = {{\n")
+    for i, key in enumerate(keys, 1):
+        ladder = probe(key)
+        lines.append(f"    {key}: {ladder},\n")
+        print(f"  {name} {i}/{len(keys)} -> {ladder}", flush=True)
+    lines.append("}\n\n")
 
 
 def main():
-    collect_keys = shape_keys()
-    print(f"{len(collect_keys)} collect shapes", flush=True)
+    collect_keys, masked_keys, cascade_keys, score_keys = shape_keys()
+    print(f"{len(collect_keys)} full-board collect shapes, "
+          f"{len(masked_keys)} shaped-board collect shapes, "
+          f"{len(cascade_keys)} cascade shapes, "
+          f"{len(score_keys)} score shapes", flush=True)
 
     lines = [HEADER.format(playouts=lg.GOAL_SIM_PLAYOUTS,
+                           cascadeplayouts=lg.CASCADE_SIM_PLAYOUTS,
+                           scoreplayouts=lg.SCORE_SIM_PLAYOUTS,
                            randchance=lg.SIM_RANDOM_MOVE_CHANCE,
                            scan=SCAN_LEVELS - 1)]
-    lines.append("COLLECT_LADDERS = {\n")
-    for i, key in enumerate(collect_keys, 1):
-        ladder = lg._probe_collect_ladder(*key)
-        lines.append(f"    {key}: {ladder},\n")
-        print(f"  collect {i}/{len(collect_keys)} {key} -> {ladder}", flush=True)
-    lines.append("}\n")
+    _emit(lines, "COLLECT_LADDERS", collect_keys,
+          lambda k: lg._probe_collect_ladder(*k),
+          "Full-board collect ladders. Key: (rows, cols, colors, moves)")
+    _emit(lines, "MASKED_COLLECT_LADDERS", masked_keys,
+          lambda k: lg._probe_collect_ladder(*k),
+          "Shaped-board collect ladders. Key: (rows, cols, colors, moves, mask)")
+    _emit(lines, "CASCADE_LADDERS", cascade_keys,
+          lambda k: lg._cascade_ladder(*k),
+          "Chain of Grace ladders. Key: (rows, cols, colors, moves, mask)")
+    _emit(lines, "SCORE_LADDERS", score_keys,
+          lambda k: lg._probe_score_ladder(*k),
+          "Endless score/timed ladders. Key: (rows, cols, colors, moves, mask)")
 
     with open(OUT, "w") as fh:
         fh.write("".join(lines))
