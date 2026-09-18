@@ -2,9 +2,11 @@
 
 js/content.js generates levels when the API is unreachable, and it has no
 playout simulation — its goals are conservative stand-ins for the server's
-calibrated ones (see offlineCollectGoal / offlineVeilRequired there). This
-plays those levels with the same simulator the server calibrates with, so the
-offline path is held to the same "no unwinnable level" bar.
+calibrated ones (see offlineCollectGoal / offlineVeilRequired / the score
+formula there). This plays those levels with the same simulator the server
+calibrates with, so the offline path is held to the same "no unwinnable
+level" bar, across every objective and on shaped boards as well as full
+ones.
 
 Feed it a JSON dump of offline levels, keyed "<mode>:<index>":
 
@@ -27,25 +29,42 @@ PLAYOUTS = 15
 FLOOR_WIN_RATE = 0.25
 
 
+CHECKED_OBJECTIVES = ("collect", "veil", "cascade", "timed", "score")
+
+
 def win_rate(key: str, lvl: dict) -> float:
+    """Share of simulated playouts that clear this offline-generated level.
+
+    Covers every objective, and plays the level's board mask, because past the
+    endless range an offline level can be any of the five tasks on a board cut
+    to a shape — checking only collect and veil on a full rectangle would now
+    miss most of what the fallback produces."""
+    objective = lvl["objective"]
+    mask = tuple((r, c) for r, c in (lvl.get("mask") or []))
+    board = (lvl["rows"], lvl["cols"], lvl["colors"], lvl["moves"])
+    cells = (lvl.get("veil") or {}).get("cells") or []
+    reqs = lvl.get("collect") or []
+    wanted = frozenset(r["type"] for r in reqs)
     wins = 0
     for p in range(PLAYOUTS):
         rng = random.Random(lg._seed(f"offline::{key}", p))
-        if lvl["objective"] == "collect":
-            wanted = frozenset(r["type"] for r in lvl["collect"])
-            _, collected, _, _ = lg._simulate_playout(
-                lvl["rows"], lvl["cols"], lvl["colors"], lvl["moves"], rng,
-                objective="collect", wanted=wanted)
-            if all(collected.get(r["type"], 0) >= r["count"] for r in lvl["collect"]):
+        score, collected, left, total, chains = lg._simulate_playout(
+            *board, rng,
+            objective=objective if objective in ("collect", "veil") else "score",
+            wanted=wanted, veil_cells=cells if objective == "veil" else None,
+            blocked=mask)
+        if objective == "collect":
+            if all(collected.get(r["type"], 0) >= r["count"] for r in reqs):
                 wins += 1
-        else:
-            cells = lvl["veil"]["cells"]
-            required = lvl["veil"].get("required") or len(cells)
-            _, _, left, total = lg._simulate_playout(
-                lvl["rows"], lvl["cols"], lvl["colors"], lvl["moves"], rng,
-                objective="veil", veil_cells=cells)
-            if total - left >= required:
+        elif objective == "veil":
+            if total - left >= ((lvl["veil"].get("required") or len(cells))):
                 wins += 1
+        elif objective == "cascade":
+            landed = sum(1 for d in chains if d >= lg.CASCADE_MIN_DEPTH)
+            if landed >= (lvl.get("cascade") or {}).get("required", 1):
+                wins += 1
+        elif score >= lvl["target"]:
+            wins += 1
     return wins / PLAYOUTS
 
 
@@ -56,7 +75,7 @@ def main():
     failures = []
     by_mode: dict = {}
     for key, lvl in levels.items():
-        if lvl["objective"] not in ("collect", "veil"):
+        if lvl["objective"] not in CHECKED_OBJECTIVES:
             continue
         rate = win_rate(key, lvl)
         by_mode.setdefault(key.split(":")[0], []).append(rate)
@@ -72,9 +91,18 @@ def main():
         return 0
     print(f"  {len(failures)} level(s) below the floor:")
     for key, lvl, rate in failures:
-        goal = ([r["count"] for r in lvl["collect"]] if lvl["objective"] == "collect"
-                else f'{lvl["veil"].get("required")} of {len(lvl["veil"]["cells"])}')
-        print(f'    {key} {lvl["rows"]}x{lvl["cols"]}/{lvl["colors"]}c/{lvl["moves"]}m: '
+        objective = lvl["objective"]
+        if objective == "collect":
+            goal = [r["count"] for r in lvl["collect"]]
+        elif objective == "veil":
+            goal = f'{lvl["veil"].get("required")} of {len(lvl["veil"]["cells"])}'
+        elif objective == "cascade":
+            goal = f'{(lvl.get("cascade") or {}).get("required")} chains'
+        else:
+            goal = lvl["target"]
+        cut = f'/{len(lvl.get("mask") or [])}cut' if lvl.get("mask") else ""
+        print(f'    {key} [{objective}] '
+              f'{lvl["rows"]}x{lvl["cols"]}/{lvl["colors"]}c/{lvl["moves"]}m{cut}: '
               f'asks {goal}, win {rate*100:.0f}%')
     return 1
 
